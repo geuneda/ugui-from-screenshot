@@ -90,34 +90,75 @@ get_screenshot(fileKey=":fileKey", nodeId=":nodeId")
 
 Figma MCP가 반환한 에셋 URL에서 아이콘/이미지를 다운로드하고 Unity Sprite로 임포트한다.
 
-**1단계: 에셋 URL 추출**
+**0단계: 에셋 레지스트리 초기화**
 
-`get_design_context` 응답에서 이미지 상수를 식별한다:
+다운로드할 에셋 목록을 먼저 수집하고, 중복을 제거한다.
+내부적으로 `{asset_url → local_path}` 매핑을 유지한다.
+
+```
+assetRegistry = {}   # URL → Unity 에셋 경로 매핑
+```
+
+**1단계: 에셋 URL 추출 및 분류**
+
+`get_design_context` 응답에서 이미지 상수를 식별하고 용도별로 분류한다:
 ```
 const image = 'https://www.figma.com/api/mcp/asset/550e8400-...'
 ```
 
-**2단계: 다운로드**
+분류 기준 (Figma 노드의 크기/이름/용도로 판단):
+
+| 분류 | 판단 기준 | 폴더 |
+|------|-----------|------|
+| Icons | 크기 ≤ 64px, 이름에 icon/ic/arrow/chevron 포함 | `Icons/` |
+| Images | content 영역 내 이미지, 일러스트, 사진 | `Images/` |
+| Backgrounds | 전체 화면/섹션 배경, 이름에 bg/background 포함 | `Backgrounds/` |
+| Buttons | 버튼 내부 이미지, 이름에 btn 포함 | `Buttons/` |
+| 기타 | 위에 해당하지 않는 에셋 | `Misc/` |
+
+**2단계: 중복 확인 후 다운로드**
+
+에셋마다 다운로드 전에 이미 존재하는지 확인한다:
+
 ```bash
-mkdir -p {unityProjectPath}/Assets/FigmaAssets
-curl -o {unityProjectPath}/Assets/FigmaAssets/{name}.png {asset_url}
+# 폴더 생성 (최초 1회)
+mkdir -p {projectPath}/Assets/FigmaAssets/{Icons,Images,Backgrounds,Buttons,Misc}
+
+# 각 에셋에 대해:
+# 1) 이미 다운로드된 에셋인지 확인
+if [ ! -f {projectPath}/Assets/FigmaAssets/Icons/{name}.png ]; then
+  curl -o {projectPath}/Assets/FigmaAssets/Icons/{name}.png {asset_url}
+fi
+```
+
+같은 URL이 여러 UI 요소에서 참조되면 한 번만 다운로드하고 경로를 재사용한다:
+```
+# 레지스트리에 등록
+assetRegistry[asset_url] = "Assets/FigmaAssets/Icons/{name}.png"
+
+# 이후 같은 URL 참조 시 레지스트리에서 경로만 가져옴
+spritePath = assetRegistry[asset_url]
 ```
 
 **3단계: Unity에 에셋 등록**
+
+모든 에셋을 다운로드한 후 한 번만 호출한다 (에셋마다 호출하지 않는다):
 ```bash
 unity-cli editor refresh
 ```
 
 **4단계: Sprite 임포트 설정 (필수!)**
 
-Unity는 PNG/JPG를 기본적으로 `Default` 텍스처로 임포트한다. UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 한다:
+Unity는 PNG/JPG를 기본적으로 `Default` 텍스처로 임포트한다. UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 한다.
+
+새로 다운로드한 에셋만 임포트 설정을 변경한다 (이미 Sprite인 에셋은 건너뜀):
 
 ```bash
-unity-cli asset import-texture path=Assets/FigmaAssets/{name}.png textureType=Sprite
+unity-cli asset import-texture path=Assets/FigmaAssets/Icons/icon_back.png textureType=Sprite
+unity-cli asset import-texture path=Assets/FigmaAssets/Images/hero.png textureType=Sprite maxTextureSize=2048
 ```
 
-이 단계를 생략하면 `spritePath` 지정 시 sprite가 null이 되어 이미지가 표시되지 않는다.
-(`ui.image.create`가 자동 변환을 시도하지만, 명시적 호출이 안전하다.)
+`asset.import-texture`는 이미 올바른 설정이면 재임포트를 건너뛴다 (`reimported: false`).
 
 추가 옵션:
 - `spriteMode=1` (Single), `spriteMode=2` (Multiple) -- 기본값: Single
@@ -127,12 +168,13 @@ unity-cli asset import-texture path=Assets/FigmaAssets/{name}.png textureType=Sp
 **5단계: Image 생성 시 에셋 할당**
 ```bash
 unity-cli ui image.create canvasName=UICanvas name=HeroImage \
-  parentName=Content spritePath=Assets/FigmaAssets/hero.png \
+  parentName=Content spritePath=Assets/FigmaAssets/Images/hero.png \
   preserveAspect=true size=400,300
 ```
 
 - `preserveAspect=true`: 원본 비율 유지 (원화/아이콘에 필수)
 - `useNativeSize=true`: 스프라이트 원본 해상도로 크기 설정
+- 같은 스프라이트를 여러 UI 요소에서 사용할 때 동일한 `spritePath` 지정
 
 #### Step 1A.6: 정보 추출 및 Canvas 설정
 
@@ -459,8 +501,12 @@ unity-cli ui screenshot.capture width={w} height={h} \
    - ...
 
    ### 다운로드된 Figma 에셋
-   Assets/FigmaAssets/icon_back.png
-   Assets/FigmaAssets/icon_menu.png
+   Assets/FigmaAssets/
+     Icons/icon_back.png (2 곳에서 사용)
+     Icons/icon_menu.png
+     Images/hero_illustration.png
+     Backgrounds/main_bg.png
+   총 4개 에셋, 중복 다운로드 0건
    ...
 
    ### 임시 파일

@@ -227,47 +227,87 @@ sizeDelta = (figma.w, figma.h)
 ### 전체 파이프라인
 
 ```
-Figma MCP → curl 다운로드 → editor refresh → asset import-texture → ui image.create
+에셋 URL 수집 → 분류 → 중복 확인 → curl 다운로드 → editor refresh → asset import-texture → ui image.create
 ```
+
+### 폴더 구조
+
+```
+Assets/FigmaAssets/
+  Icons/          -- 작은 아이콘 (≤64px, icon/ic/arrow/chevron/close/check 등)
+  Images/         -- 컨텐츠 이미지, 일러스트, 사진, 원화
+  Backgrounds/    -- 전체 화면/섹션 배경 (bg/background/wallpaper 등)
+  Buttons/        -- 버튼 전용 이미지 (btn/button 등)
+  Misc/           -- 위에 해당하지 않는 에셋
+```
+
+분류 판단 기준:
+| 분류 | 조건 |
+|------|------|
+| Icons | 크기 ≤ 64px, 또는 이름에 icon/ic/arrow/chevron/close/check 포함 |
+| Images | content 영역 내 이미지, 일러스트, 사진 |
+| Backgrounds | 프레임/섹션 전체를 덮는 이미지, 이름에 bg/background 포함 |
+| Buttons | 버튼 내부 이미지, 이름에 btn/button 포함 |
+| Misc | 위에 해당하지 않는 에셋 |
+
+### 에셋 레지스트리 (중복 방지)
+
+에셋 URL → Unity 로컬 경로 매핑을 내부적으로 관리한다:
+
+```
+assetRegistry = {
+  "https://figma.com/api/mcp/asset/abc123": "Assets/FigmaAssets/Icons/icon_back.png",
+  "https://figma.com/api/mcp/asset/def456": "Assets/FigmaAssets/Images/hero.png",
+}
+```
+
+**규칙:**
+- 같은 URL은 한 번만 다운로드한다
+- 여러 UI 요소가 같은 에셋을 참조하면 동일한 `spritePath`를 재사용한다
+- 파일이 이미 디스크에 존재하면 다운로드를 건너뛴다
+- `asset.import-texture`도 이미 Sprite 타입이면 재임포트를 건너뛴다
 
 ### 상세 단계
 
 1. `get_design_context` 응답에서 에셋 URL 식별:
    - 코드 내 `const image = 'https://www.figma.com/api/mcp/asset/...'`
    - `<img src={image} />` 패턴에서 URL 추출
+   - 모든 URL을 수집하고 중복을 제거한다
 
-2. 다운로드:
+2. 분류 후 다운로드 (이미 존재하는 파일은 건너뜀):
    ```bash
-   mkdir -p {projectPath}/Assets/FigmaAssets
-   curl -o {projectPath}/Assets/FigmaAssets/{name}.png {url}
+   mkdir -p {projectPath}/Assets/FigmaAssets/{Icons,Images,Backgrounds,Buttons,Misc}
+
+   # 파일이 없을 때만 다운로드
+   [ ! -f {path} ] && curl -o {path} {url}
    ```
 
-3. Unity에 에셋 등록:
+3. Unity에 에셋 등록 (모든 다운로드 완료 후 1회):
    ```bash
    unity-cli editor refresh
    ```
 
-4. **Sprite 임포트 설정 (필수!)**:
+4. **Sprite 임포트 설정 (새로 다운로드한 에셋만)**:
    ```bash
    unity-cli asset import-texture \
-     path=Assets/FigmaAssets/{name}.png \
-     textureType=Sprite \
-     maxTextureSize=2048
-   ```
-   - Unity는 기본적으로 텍스처를 `Default` 타입으로 임포트
-   - UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 함
-   - 이 단계를 생략하면 `LoadAssetAtPath<Sprite>()` 가 null 반환 → 이미지 미표시
+     path=Assets/FigmaAssets/Icons/icon_back.png \
+     textureType=Sprite
 
-5. Image 생성 시 에셋 할당:
+   unity-cli asset import-texture \
+     path=Assets/FigmaAssets/Images/hero.png \
+     textureType=Sprite maxTextureSize=2048
+   ```
+
+5. Image 생성 시 에셋 할당 (레지스트리에서 경로 참조):
    ```bash
    unity-cli ui image.create canvasName=UICanvas name=HeroImage \
-     parentName=Content spritePath=Assets/FigmaAssets/{name}.png \
+     parentName=Content spritePath=Assets/FigmaAssets/Images/hero.png \
      preserveAspect=true size=400,300
+
+   # 같은 아이콘을 여러 곳에서 재사용
+   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_back.png ...
+   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_back.png ...
    ```
-
-### 에셋 저장 경로 규칙
-
-`Assets/FigmaAssets/{원본이름}.{확장자}`
 
 ### 이미지 파라미터
 

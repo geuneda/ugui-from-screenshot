@@ -231,3 +231,65 @@ unity-cli ui screenshot.capture width=1440 height=3040 \
   "outputPath": "Assets/Screenshots/capture.png"
 }
 ```
+
+---
+
+### asset import-texture
+
+텍스처 에셋의 임포트 설정을 변경한다. **Figma 에셋을 UGUI Image에 사용하려면 필수.**
+
+Unity는 PNG/JPG를 기본적으로 `Default` 텍스처로 임포트하므로, UGUI Image의 `spritePath`로 사용하려면 `Sprite` 타입으로 변환해야 한다.
+
+```bash
+# 기본: Sprite 타입으로 변환
+unity-cli asset import-texture path=Assets/FigmaAssets/icon.png
+
+# 큰 원화의 경우 최대 텍스처 크기 지정
+unity-cli asset import-texture path=Assets/FigmaAssets/hero.png \
+  textureType=Sprite maxTextureSize=2048
+
+# 픽셀 아트 (Point 필터)
+unity-cli asset import-texture path=Assets/FigmaAssets/pixel_icon.png \
+  textureType=Sprite filterMode=Point
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | required | Unity 프로젝트 내 에셋 경로 |
+| `textureType` | string | Sprite | Sprite / Default / NormalMap / Cursor |
+| `spriteMode` | int | 1 | 1=Single, 2=Multiple |
+| `maxTextureSize` | int | (유지) | 최대 텍스처 크기 (256~8192) |
+| `filterMode` | string | (유지) | Bilinear / Point / Trilinear |
+
+응답:
+```json
+{
+  "path": "Assets/FigmaAssets/icon.png",
+  "textureType": "Sprite",
+  "spriteMode": 1,
+  "maxTextureSize": 2048,
+  "hasSpriteAsset": true,
+  "reimported": true
+}
+```
+
+#### ui.image.create 추가 파라미터
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `preserveAspect` | bool | false | 원본 비율 유지 (원화/아이콘에 권장) |
+| `useNativeSize` | bool | false | 스프라이트 원본 해상도로 크기 설정 |
+
+```bash
+# 원화 이미지를 비율 유지하며 표시
+unity-cli ui image.create canvasName=UICanvas name=HeroArt \
+  parentName=Content spritePath=Assets/FigmaAssets/hero.png \
+  preserveAspect=true size=400,300
+
+# 아이콘을 원본 크기로 표시
+unity-cli ui image.create canvasName=UICanvas name=Icon \
+  parentName=Header spritePath=Assets/FigmaAssets/icon.png \
+  useNativeSize=true
+```
+
+**자동 Sprite 변환**: `spritePath`로 로드할 때 Sprite가 null이면 자동으로 TextureImporter를 Sprite 타입으로 변환하고 재임포트를 시도한다. 하지만 에셋이 많은 경우 `asset import-texture`를 배치로 먼저 호출하는 것이 안전하다.

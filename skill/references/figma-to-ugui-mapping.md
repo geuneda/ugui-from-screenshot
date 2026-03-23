@@ -222,17 +222,72 @@ sizeDelta = (figma.w, figma.h)
 5. Layout Group 사용 시 자식 좌표는 Layout이 자동 결정 (생략 가능)
 ```
 
-## 에셋 다운로드 흐름
+## 에셋 다운로드 및 Sprite 임포트 흐름
 
-1. `get_design_context` 응답에서 에셋 URL 목록 확인
-2. localhost URL이면 직접 다운로드:
+### 전체 파이프라인
+
+```
+Figma MCP → curl 다운로드 → editor refresh → asset import-texture → ui image.create
+```
+
+### 상세 단계
+
+1. `get_design_context` 응답에서 에셋 URL 식별:
+   - 코드 내 `const image = 'https://www.figma.com/api/mcp/asset/...'`
+   - `<img src={image} />` 패턴에서 URL 추출
+
+2. 다운로드:
    ```bash
-   curl -o Assets/FigmaAssets/{name}.png {localhost_url}
+   mkdir -p {projectPath}/Assets/FigmaAssets
+   curl -o {projectPath}/Assets/FigmaAssets/{name}.png {url}
    ```
-3. `unity-cli editor refresh`로 Unity에 에셋 등록
-4. Image 생성 시 `spritePath=Assets/FigmaAssets/{name}.png`로 할당
 
-에셋 저장 경로 규칙: `Assets/FigmaAssets/{원본이름}.{확장자}`
+3. Unity에 에셋 등록:
+   ```bash
+   unity-cli editor refresh
+   ```
+
+4. **Sprite 임포트 설정 (필수!)**:
+   ```bash
+   unity-cli asset import-texture \
+     path=Assets/FigmaAssets/{name}.png \
+     textureType=Sprite \
+     maxTextureSize=2048
+   ```
+   - Unity는 기본적으로 텍스처를 `Default` 타입으로 임포트
+   - UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 함
+   - 이 단계를 생략하면 `LoadAssetAtPath<Sprite>()` 가 null 반환 → 이미지 미표시
+
+5. Image 생성 시 에셋 할당:
+   ```bash
+   unity-cli ui image.create canvasName=UICanvas name=HeroImage \
+     parentName=Content spritePath=Assets/FigmaAssets/{name}.png \
+     preserveAspect=true size=400,300
+   ```
+
+### 에셋 저장 경로 규칙
+
+`Assets/FigmaAssets/{원본이름}.{확장자}`
+
+### 이미지 파라미터
+
+| 파라미터 | 설명 | 기본값 |
+|---------|------|--------|
+| `spritePath` | Unity 프로젝트 내 에셋 경로 | (필수) |
+| `preserveAspect` | 원본 비율 유지 | false |
+| `useNativeSize` | 스프라이트 원본 해상도로 크기 설정 | false |
+| `imageType` | Simple / Sliced / Tiled / Filled | Simple |
+| `color` | 틴트 색상 (hex) | #FFFFFFFF |
+
+### 자동 임포트 폴백
+
+`ui.image.create`에서 `spritePath` 로드 시 Sprite가 null이면 자동으로:
+1. TextureImporter 확인
+2. textureType != Sprite이면 Sprite로 변경 + SaveAndReimport
+3. 다시 LoadAssetAtPath<Sprite> 시도
+
+따라서 `asset.import-texture`를 명시적으로 호출하지 않아도 동작하지만,
+에셋이 많은 경우 배치 처리를 위해 명시적 호출을 권장한다.
 
 ## 복잡한 구조 처리
 

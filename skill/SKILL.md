@@ -86,12 +86,53 @@ get_screenshot(fileKey=":fileKey", nodeId=":nodeId")
 
 이 스크린샷이 Phase 3 검증 루프의 비교 기준이 된다.
 
-#### Step 1A.5: 에셋 다운로드
+#### Step 1A.5: 에셋 다운로드 및 Sprite 임포트
 
-Figma MCP가 반환한 에셋 URL(localhost)에서 아이콘/이미지를 다운로드한다.
-- Shell 도구로 curl/wget을 사용하여 Unity 프로젝트의 `Assets/` 하위에 저장
-- 저장 후 `unity-cli editor refresh`로 에셋 인식
-- 다운로드한 에셋 경로를 `spritePath`로 사용
+Figma MCP가 반환한 에셋 URL에서 아이콘/이미지를 다운로드하고 Unity Sprite로 임포트한다.
+
+**1단계: 에셋 URL 추출**
+
+`get_design_context` 응답에서 이미지 상수를 식별한다:
+```
+const image = 'https://www.figma.com/api/mcp/asset/550e8400-...'
+```
+
+**2단계: 다운로드**
+```bash
+mkdir -p {unityProjectPath}/Assets/FigmaAssets
+curl -o {unityProjectPath}/Assets/FigmaAssets/{name}.png {asset_url}
+```
+
+**3단계: Unity에 에셋 등록**
+```bash
+unity-cli editor refresh
+```
+
+**4단계: Sprite 임포트 설정 (필수!)**
+
+Unity는 PNG/JPG를 기본적으로 `Default` 텍스처로 임포트한다. UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 한다:
+
+```bash
+unity-cli asset import-texture path=Assets/FigmaAssets/{name}.png textureType=Sprite
+```
+
+이 단계를 생략하면 `spritePath` 지정 시 sprite가 null이 되어 이미지가 표시되지 않는다.
+(`ui.image.create`가 자동 변환을 시도하지만, 명시적 호출이 안전하다.)
+
+추가 옵션:
+- `spriteMode=1` (Single), `spriteMode=2` (Multiple) -- 기본값: Single
+- `maxTextureSize=2048` -- 큰 원화의 경우
+- `filterMode=Bilinear` / `Point` / `Trilinear`
+
+**5단계: Image 생성 시 에셋 할당**
+```bash
+unity-cli ui image.create canvasName=UICanvas name=HeroImage \
+  parentName=Content spritePath=Assets/FigmaAssets/hero.png \
+  preserveAspect=true size=400,300
+```
+
+- `preserveAspect=true`: 원본 비율 유지 (원화/아이콘에 필수)
+- `useNativeSize=true`: 스프라이트 원본 해상도로 크기 설정
 
 #### Step 1A.6: 정보 추출 및 Canvas 설정
 

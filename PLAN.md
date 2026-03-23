@@ -440,6 +440,22 @@ Path B: 스크린샷 (기존)
 17. [ ] 스크린샷 파일로 E2E 테스트
 
 ### Phase D: 다해상도 대응 개선 -- DONE
+### Phase E: 에셋 임포트 파이프라인 -- DONE
+21. [x] Bridge에 `asset.import-texture` 도구 추가
+    - TextureImporter 설정 변경 (textureType, spriteMode, maxTextureSize, filterMode)
+    - SaveAndReimport 자동 호출
+    - Unity 기본 텍스처 임포트(Default)를 Sprite로 변환
+22. [x] `ui.image.create` 개선
+    - `preserveAspect` 파라미터 추가 (원본 비율 유지)
+    - `useNativeSize` 파라미터 추가 (원본 해상도 크기)
+    - spritePath 로드 시 Sprite null인 경우 자동 TextureImporter 변환 폴백
+23. [x] 스킬 문서 업데이트
+    - Step 1A.5를 에셋 다운로드 + Sprite 임포트 5단계 파이프라인으로 확장
+    - figma-to-ugui-mapping.md 에셋 섹션 전면 재작성
+    - new-commands.md에 asset.import-texture 및 Image 파라미터 문서 추가
+    - commands.md(unity-cli)에 asset.import-texture 명령 추가
+
+
 18. [x] 스킬 Phase 2에 반응형 앵커 결정 알고리즘 추가
     - 요소 역할별 앵커 프리셋 선택 가이드
     - Tailwind CSS 클래스에서 레이아웃 의도 분석 로직
@@ -468,4 +484,5 @@ Path B: 스크린샷 (기존)
 - **Figma 정확도**: Figma MCP 경로는 정밀하지만, Auto Layout 중첩이 복잡한 경우 좌표 변환 오차 가능
 - **Figma MCP 의존**: Figma MCP 서버가 비활성이면 스크린샷 경로로만 작동
 - **에셋 형식**: Figma에서 SVG로 내보내진 에셋은 Unity에서 직접 사용 불가 (PNG 변환 필요)
+- **에셋 임포트**: `asset.import-texture`로 자동 Sprite 변환 지원. 다만 Atlas 패킹이나 9-slice border 설정은 수동 필요
 - **복잡한 UI**: 중첩 ScrollView, 커스텀 셰이더 UI 등은 수동 보완 필요

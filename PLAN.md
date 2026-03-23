@@ -433,17 +433,35 @@ Path B: 스크린샷 (기존)
 15. [x] 로컬 스킬 디렉토리에 설치
 
 ### Phase C: 검증
-16. [ ] 기존 기능 회귀 테스트 (`verify-editor.sh`)
-17. [ ] 새 명령어 수동 테스트
-18. [ ] Figma URL로 E2E 테스트
-19. [ ] 스크린샷 파일로 E2E 테스트
+16. [x] Figma URL로 E2E 테스트 (UnityToFigmaHostProject, 1440x3040)
+    - 결과: 레이아웃 구조, 색상, 영문 텍스트, 버튼 배치 정상 동작
+    - 발견 이슈: 한글 폰트 미지원(기본 Arial), 배경색 CLI 제어 미지원
+    - 수정: ResizeGameView 리플렉션 Unity 6000 호환 개선 (a6dd784)
+17. [ ] 스크린샷 파일로 E2E 테스트
+
+### Phase D: 다해상도 대응 개선 -- DONE
+18. [x] 스킬 Phase 2에 반응형 앵커 결정 알고리즘 추가
+    - 요소 역할별 앵커 프리셋 선택 가이드
+    - Tailwind CSS 클래스에서 레이아웃 의도 분석 로직
+    - 비율 앵커, 스트레치 앵커, Layout Group 사용 판단 기준
+19. [x] figma-to-ugui-mapping.md 좌표 변환 공식 전면 확장
+    - center anchor 외 7가지 앵커 타입별 변환 공식
+    - 비율 앵커(proportional column) 계산법
+    - offsetMin/offsetMax 사용 가이드
+20. [x] anchoring-strategy.md에 Figma 분석 큐 추가
+    - Tailwind CSS → 앵커 추론 테이블
+    - 통합 결정 플로우차트
+    - Figma Auto Layout → UGUI 변환 패턴
+    - 다해상도 안전 체크리스트
 
 ---
 
 ## 6. Known Limitations
 
-- **폰트**: TMP 기본 폰트만 사용 가능. 커스텀 폰트 에셋은 수동 설정 필요
-- **그라디언트/그림자**: UI 효과(Shadow, Outline, Gradient)는 자동화 범위 밖
+- **폰트**: TMP 기본 폰트만 사용 가능. 한글 등 비-라틴 글리프는 별도 폰트 에셋 필요
+- **그라디언트/그림자**: UI 효과(Shadow, Outline, Gradient)는 자동화 범위 밖 (단색 근사)
+- **둥근 모서리**: UGUI Image는 CSS border-radius 미지원 → 9-slice 스프라이트 필요
+- **카메라 배경**: Camera clearFlags/backgroundColor CLI 제어 미지원
 - **애니메이션**: 전환 애니메이션은 포함하지 않음
 - **Safe Area**: 노치/홀 대응은 별도 SafeArea 스크립트 필요
 - **스크린샷 정확도**: Claude 비전 기반(스크린샷 경로)이므로 픽셀 단위 정밀도는 아님

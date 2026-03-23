@@ -209,25 +209,82 @@ unity-cli ui layout.add name=CardGrid layoutType=Grid \
 
 ## Decision Guide
 
-스크린샷 분석 시 앵커링 전략 결정 흐름:
+### Figma 디자인 컨텍스트에서 앵커 결정
+
+`get_design_context`가 반환하는 Tailwind CSS 클래스에서 레이아웃 의도를 분석:
 
 ```
-요소가 화면 가장자리에 붙어있는가?
-  YES -> 해당 가장자리 앵커 (top/bottom/left/right)
-    가로 전체?
-      YES -> anchorMin.x=0, anchorMax.x=1 (가로 스트레치)
-      NO  -> 고정 너비
-  NO  -> 부모 기준 상대 위치
-    중앙 정렬?
-      YES -> center anchor (0.5, 0.5)
-      NO  -> 가장 가까운 가장자리 앵커
+Tailwind 클래스 분석 순서:
 
-요소들이 균등 배치되어 있는가?
-  YES -> Layout Group 사용
-    가로 배열? -> HorizontalLayoutGroup
-    세로 배열? -> VerticalLayoutGroup
-    격자 배열? -> GridLayoutGroup
+1) 최상위 컨테이너의 position/size 확인
+   - `size-full` 또는 `w-full h-full` → 풀 스트레치
+   - `absolute` + 위치값 → 해당 가장자리 앵커
+   - 고정 w/h (px 값) → 고정 크기
 
-요소가 스크롤 가능한가?
-  YES -> ScrollRect + VerticalLayoutGroup + ContentSizeFitter
+2) Flex/Grid 레이아웃 확인
+   - `flex flex-col` → Vertical Layout Group
+   - `flex` (기본) → Horizontal Layout Group
+   - `grid grid-cols-[...]` → 비율 앵커 분할 또는 Grid Layout
+   - `gap-{n}` → Layout spacing
+
+3) 자식 요소의 크기 결정 확인
+   - `flex-[1_0_0]` → 부모 내 비율 채우기 (스트레치)
+   - `shrink-0` + 고정 크기 → 고정 크기 요소
+   - `justify-self-stretch` → 가로 스트레치
+   - `self-stretch` → 세로 스트레치
+
+4) 정렬 확인
+   - `items-center` → 교차축 중앙
+   - `justify-between` → 양쪽 정렬
+   - `justify-center` → 주축 중앙
+```
+
+### 통합 결정 플로우차트
+
+```
+[요소 분석 시작]
+  │
+  ├─ 화면 가장자리에 붙어있는가?
+  │   ├─ 상단 + 가로 전체 → Top Stretch (anchorMin=0,1 anchorMax=1,1)
+  │   ├─ 하단 + 가로 전체 → Bottom Stretch (anchorMin=0,0 anchorMax=1,0)
+  │   ├─ 좌측 + 세로 전체 → Left Stretch (anchorMin=0,0 anchorMax=0,1)
+  │   └─ 우측 + 세로 전체 → Right Stretch (anchorMin=1,0 anchorMax=1,1)
+  │
+  ├─ 부모 전체를 채우는가?
+  │   └─ YES → Full Stretch (anchorMin=0,0 anchorMax=1,1) + offsetMin/offsetMax
+  │
+  ├─ 형제 요소와 나란히 배치되어 있는가?
+  │   ├─ 가로 나란히 → 방법 선택:
+  │   │   ├─ 비율 고정 → 비율 앵커 (anchorMin.x=ratio1, anchorMax.x=ratio2)
+  │   │   └─ 동적 분배 → Horizontal Layout Group
+  │   └─ 세로 나란히 → Vertical Layout Group
+  │
+  ├─ 중앙에 독립적으로 위치하는가?
+  │   └─ YES → Center Fixed (anchorMin=0.5,0.5 anchorMax=0.5,0.5)
+  │
+  └─ 그 외 → 부모 기준 가장 가까운 가장자리 앵커 + 고정 크기
+```
+
+### Figma Auto Layout → UGUI 변환 패턴
+
+| Figma Auto Layout 설정 | UGUI 구현 |
+|------------------------|-----------|
+| direction=VERTICAL, 자식 FILL 가로 | VLG + childForceExpandWidth=true |
+| direction=HORIZONTAL, 자식 FILL 세로 | HLG + childForceExpandHeight=true |
+| direction=HORIZONTAL, 자식 HUG | HLG + 자식에 ContentSizeFitter |
+| spacing=auto (space-between) | HLG/VLG의 childForceExpand로 근사 |
+| padding (asymmetric) | paddingLeft/Right/Top/Bottom 개별 설정 |
+
+### 다해상도 안전 체크리스트
+
+빌드 완료 후 확인:
+
+```
+□ 가로 전체 너비 요소에 anchorMin.x=0, anchorMax.x=1 사용했는가?
+□ 상단 고정 요소에 anchorMin.y=1, anchorMax.y=1, pivot.y=1 사용했는가?
+□ 하단 고정 요소에 anchorMin.y=0, anchorMax.y=0, pivot.y=0 사용했는가?
+□ 고정 크기 요소에만 sizeDelta로 크기를 지정했는가?
+□ 스트레치 요소에 offsetMin/offsetMax를 사용했는가?
+□ 2-column 레이아웃에 비율 앵커 또는 Layout Group을 사용했는가?
+□ 모든 요소의 앵커가 center(0.5,0.5)로 되어있지 않은가? (경고!)
 ```

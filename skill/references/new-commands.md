@@ -106,7 +106,7 @@ unity-cli ui image.create canvasName=UICanvas name=Icon \
 ```bash
 unity-cli ui button.create canvasName=UICanvas name=SubmitBtn \
   parentName=Footer text=Submit \
-  fontSize=32 fontStyle=Bold textAlignment=MiddleCenter \
+  fontSize=32 fontStyle=Bold alignment=MiddleCenter \
   color=#2788FFFF textColor=#FFFFFFFF
 ```
 
@@ -114,7 +114,7 @@ unity-cli ui button.create canvasName=UICanvas name=SubmitBtn \
 |-----------|------|---------|-------------|
 | `fontSize` | float | 24 | 라벨 폰트 크기 |
 | `fontStyle` | string | "Normal" | 라벨 폰트 스타일 |
-| `textAlignment` | string | "MiddleCenter" | 라벨 정렬 |
+| `alignment` | string | "MiddleCenter" | 라벨 정렬 |
 | `parentName` | string | null | 부모 RectTransform 이름 |
 | `parentId` | int | null | 부모 InstanceID |
 | `anchorMin` | Vector2 | 0.5,0.5 | 앵커 최소 |

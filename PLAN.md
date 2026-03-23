@@ -377,29 +377,29 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
 
 ## 5. Implementation Sequence
 
-### Phase A: Bridge 개선 (unity-cli repo PR)
-1. `ApplyRectTransform` 앵커/피봇 파라미터 추가
-2. `ResolveUiParent` 헬퍼 + 전체 Create 메서드 통합
-3. `EnsureCanvas` CanvasScaler 파라미터 추가
-4. Text 스타일링 파라미터 추가
-5. Image spritePath 파라미터 추가
-6. `ui.panel.create` 도구 추가
-7. `ui.layout.add` 도구 추가
-8. `ui.recttransform.modify` 도구 추가
-9. `ui.screenshot.capture` 도구 추가
-10. `editor.gameview.resize` 도구 추가
-11. `ToolNames` 배열 업데이트
-12. `commands.md` 문서 업데이트
+### Phase A: Bridge 개선 (unity-cli repo) -- DONE
+1. [x] `ApplyRectTransform` 앵커/피봇 파라미터 추가
+2. [x] `ResolveUiParent` 헬퍼 + 전체 Create 메서드 통합
+3. [x] `EnsureCanvas` CanvasScaler 파라미터 추가
+4. [x] Text 스타일링 파라미터 추가
+5. [x] Image spritePath 파라미터 추가
+6. [x] `ui.panel.create` 도구 추가
+7. [x] `ui.layout.add` 도구 추가
+8. [x] `ui.recttransform.modify` 도구 추가
+9. [x] `ui.screenshot.capture` 도구 추가
+10. [x] `editor.gameview.resize` 도구 추가
+11. [x] `ToolNames` 배열 업데이트
+12. [x] `commands.md` 문서 업데이트
 
-### Phase B: Skill 생성
-13. `SKILL.md` 작성
-14. `references/` 작성
-15. 로컬 스킬 디렉토리에 설치
+### Phase B: Skill 생성 -- DONE (초기 커밋에 포함)
+13. [x] `SKILL.md` 작성
+14. [x] `references/` 작성
+15. [x] 로컬 스킬 디렉토리에 설치
 
 ### Phase C: 검증
-16. 기존 기능 회귀 테스트 (`verify-editor.sh`)
-17. 새 명령어 수동 테스트
-18. 실제 스크린샷으로 E2E 테스트
+16. [ ] 기존 기능 회귀 테스트 (`verify-editor.sh`)
+17. [ ] 새 명령어 수동 테스트
+18. [ ] 실제 스크린샷으로 E2E 테스트
 
 ---
 

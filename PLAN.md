@@ -1,14 +1,21 @@
-# UGUI from Screenshot - Implementation Plan
+# UGUI from Design - Implementation Plan
 
 ## 1. Overview
 
-사용자가 UI 디자인 스크린샷을 제공하면, Claude Code가 unity-cli를 통해 UGUI를 자동 구성하고,
+사용자가 **Figma URL** 또는 **UI 디자인 스크린샷**을 제공하면, Claude Code가 unity-cli를 통해 UGUI를 자동 구성하고,
 반복적인 검증-수정 루프를 거쳐 90%+ 일치를 달성하며, 다양한 해상도에서 대응을 점검하는 시스템.
 
 ### 핵심 기술 스택
-- **Claude Code**: 멀티모달 비전으로 스크린샷 분석 + CLI 명령 실행
+- **Figma MCP**: 디자인 메타데이터/스크린샷/에셋을 직접 조회 (권장 입력)
+- **Claude Code**: 멀티모달 비전으로 스크린샷 분석 + CLI 명령 실행 (폴백 입력)
 - **unity-cli**: Unity Editor HTTP 브릿지를 통한 UGUI 조작
 - **Unity UGUI**: Canvas, RectTransform, Layout 기반 UI 시스템
+
+### 입력 소스
+| 입력 | 경로 | 장점 |
+|------|------|------|
+| Figma URL | Figma MCP → 정밀 메타데이터 (위치/크기/색상/에셋 정확값) | 높은 정확도, 에셋 자동 다운로드 |
+| 스크린샷 파일 | Claude 비전 → 추정값 | MCP 불필요, 모든 디자인 도구 지원 |
 
 ---
 
@@ -247,24 +254,41 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
 
 ## 3. Skill 워크플로우 상세
 
-### Phase 1: Setup & Interview
+### Phase 1: Setup & Design Acquisition
 
 ```
-1. 사용자로부터 레퍼런스 스크린샷 수신 (파일 경로)
-2. Read 도구로 스크린샷 분석 (Claude 비전)
-3. 기준 해상도 확인:
-   - 사용자가 제공한 경우 그대로 사용 (예: 1440x3040)
-   - 미제공 시 사용자에게 질문
-4. ScreenMatchMode 확인 (기본: Expand)
-5. Canvas 생성:
-   unity-cli ui canvas.create name=UICanvas \
-     referenceResolution=1440,3040 screenMatchMode=Expand
+입력 판별:
+  - Figma URL → Path A (Figma MCP)
+  - 스크린샷 파일 → Path B (비전 분석)
+
+Path A: Figma MCP
+  1. URL 파싱: figma.com/design/:fileKey/:fileName?node-id=:nodeId
+  2. get_metadata(fileKey, nodeId) → 페이지 노드 트리 (타입/이름/위치/크기)
+  3. get_design_context(fileKey, nodeId) → 상세 디자인 데이터 + 스크린샷 + 에셋 URL
+  4. get_screenshot(fileKey, nodeId) → 검증용 레퍼런스 스크린샷
+  5. 에셋 다운로드: curl → Assets/FigmaAssets/ → editor refresh
+  6. 기준 해상도 = 최상위 Frame 크기
+  7. ScreenMatchMode 확인 (기본: Expand)
+  8. Canvas 생성
+
+Path B: 스크린샷 (기존)
+  1. 사용자로부터 레퍼런스 스크린샷 수신 (파일 경로)
+  2. Read 도구로 스크린샷 분석 (Claude 비전)
+  3. 기준 해상도 확인 (사용자 제공 또는 질문)
+  4. ScreenMatchMode 확인 (기본: Expand)
+  5. Canvas 생성
+
+공통:
+  unity-cli ui canvas.create name=UICanvas \
+    referenceResolution=1440,3040 screenMatchMode=Expand
 ```
 
 ### Phase 2: Analysis & Build
 
 ```
-1. 스크린샷에서 UI 요소 식별:
+1. UI 요소 식별:
+   Figma: get_design_context 응답에서 정확한 값 추출
+   스크린샷: Claude 비전으로 추정
    - 타입 (Button, Text, Image, Panel, ScrollView 등)
    - 위치 (기준 해상도 내 픽셀 좌표)
    - 크기 (픽셀 단위)
@@ -272,7 +296,15 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
    - 텍스트 내용 및 스타일
    - 계층 관계
 
-2. 앵커링 전략 결정 (references/anchoring-strategy.md 참조):
+2. Figma 속성 → UGUI 매핑 (Figma 경로):
+   - Auto Layout → Layout Group (Horizontal/Vertical)
+   - Constraints (LEFT+RIGHT) → 스트레치 앵커
+   - Constraints (TOP) → anchorMin=_,1 anchorMax=_,1 pivot=_,1
+   - Fill color → color hex
+   - Text properties → fontSize, fontStyle, alignment
+   - 에셋 URL → spritePath (다운로드 후)
+
+2b. 앵커링 전략 결정 (스크린샷 경로, references/anchoring-strategy.md 참조):
    - 상단 바: anchorMin=(0,1) anchorMax=(1,1) pivot=(0.5,1)
    - 하단 바: anchorMin=(0,0) anchorMax=(1,0) pivot=(0.5,0)
    - 콘텐츠: stretch anchor + offset
@@ -365,6 +397,10 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
 
 | 상황 | 대응 |
 |------|------|
+| Figma MCP 미연결 | MCP 서버 활성화 안내, 스크린샷 경로로 폴백 제안 |
+| Figma URL 파싱 실패 | URL 형식 안내, 수동 fileKey/nodeId 입력 요청 |
+| get_design_context 응답 과대 | get_metadata로 구조 파악 후 자식 노드별 개별 조회 |
+| 에셋 다운로드 실패 | placeholder Image로 생성, 수동 교체 안내 |
 | TMP 리소스 미설치 | 자동 임포트 대기 (기존 로직) |
 | Canvas 이름 충돌 | EnsureCanvas가 기존 Canvas 재사용 |
 | GameObject 이름 중복 | 고유 접두사 사용 (UGUI_ prefix) |
@@ -391,15 +427,16 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
 11. [x] `ToolNames` 배열 업데이트
 12. [x] `commands.md` 문서 업데이트
 
-### Phase B: Skill 생성 -- DONE (초기 커밋에 포함)
-13. [x] `SKILL.md` 작성
-14. [x] `references/` 작성
+### Phase B: Skill 생성 -- DONE
+13. [x] `SKILL.md` 작성 (Figma MCP + 스크린샷 이중 입력 지원)
+14. [x] `references/` 작성 (new-commands, anchoring-strategy, resolution-profiles, figma-to-ugui-mapping)
 15. [x] 로컬 스킬 디렉토리에 설치
 
 ### Phase C: 검증
 16. [ ] 기존 기능 회귀 테스트 (`verify-editor.sh`)
 17. [ ] 새 명령어 수동 테스트
-18. [ ] 실제 스크린샷으로 E2E 테스트
+18. [ ] Figma URL로 E2E 테스트
+19. [ ] 스크린샷 파일로 E2E 테스트
 
 ---
 
@@ -409,5 +446,8 @@ var gameView = EditorWindow.GetWindow(gameViewType, false, null, false);
 - **그라디언트/그림자**: UI 효과(Shadow, Outline, Gradient)는 자동화 범위 밖
 - **애니메이션**: 전환 애니메이션은 포함하지 않음
 - **Safe Area**: 노치/홀 대응은 별도 SafeArea 스크립트 필요
-- **스크린샷 정확도**: Claude 비전 기반이므로 픽셀 단위 정밀도는 아님
+- **스크린샷 정확도**: Claude 비전 기반(스크린샷 경로)이므로 픽셀 단위 정밀도는 아님
+- **Figma 정확도**: Figma MCP 경로는 정밀하지만, Auto Layout 중첩이 복잡한 경우 좌표 변환 오차 가능
+- **Figma MCP 의존**: Figma MCP 서버가 비활성이면 스크린샷 경로로만 작동
+- **에셋 형식**: Figma에서 SVG로 내보내진 에셋은 Unity에서 직접 사용 불가 (PNG 변환 필요)
 - **복잡한 UI**: 중첩 ScrollView, 커스텀 셰이더 UI 등은 수동 보완 필요

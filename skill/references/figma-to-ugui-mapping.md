@@ -250,63 +250,73 @@ Assets/FigmaAssets/
 | Buttons | 버튼 내부 이미지, 이름에 btn/button 포함 |
 | Misc | 위에 해당하지 않는 에셋 |
 
-### 에셋 레지스트리 (중복 방지)
+### 에셋 레지스트리 (단일 페이지 + 크로스 페이지 중복 방지)
 
-에셋 URL → Unity 로컬 경로 매핑을 내부적으로 관리한다:
+**2계층 매칭 전략:**
+
+1. **이름 기반 매칭 (크로스 페이지)**: 기존 `Assets/FigmaAssets/` 를 스캔하여 같은 이름의 에셋이 있으면 재사용
+2. **URL 기반 매칭 (단일 페이지)**: 같은 URL을 여러 요소에서 참조하면 한 번만 다운로드
 
 ```
-assetRegistry = {
-  "https://figma.com/api/mcp/asset/abc123": "Assets/FigmaAssets/Icons/icon_back.png",
-  "https://figma.com/api/mcp/asset/def456": "Assets/FigmaAssets/Images/hero.png",
+# 0단계에서 기존 에셋 스캔으로 초기화
+existingAssets = {
+  "icon_back":  "Assets/FigmaAssets/Icons/icon_back.png",    # A페이지에서 다운로드됨
+  "hero":       "Assets/FigmaAssets/Images/hero.png",         # A페이지에서 다운로드됨
 }
+
+# 이번 세션 URL 매핑
+assetRegistry = {}
 ```
 
-**규칙:**
-- 같은 URL은 한 번만 다운로드한다
-- 여러 UI 요소가 같은 에셋을 참조하면 동일한 `spritePath`를 재사용한다
-- 파일이 이미 디스크에 존재하면 다운로드를 건너뛴다
-- `asset.import-texture`도 이미 Sprite 타입이면 재임포트를 건너뛴다
+**매칭 순서:**
+
+```
+1. assetName이 existingAssets에 있음 → 기존 파일 재사용 (다운로드 X)
+2. targetPath 파일이 디스크에 존재 → 기존 파일 재사용 (다운로드 X)
+3. assetUrl이 assetRegistry에 있음 → 이미 이번 세션에 처리됨 (다운로드 X)
+4. 모두 해당 없음 → 신규 다운로드
+```
 
 ### 상세 단계
+
+0. **기존 에셋 스캔 (크로스 페이지 재사용 핵심)**:
+   ```bash
+   # 이전 페이지에서 다운로드한 에셋 목록 확인
+   find {projectPath}/Assets/FigmaAssets -type f \( -name "*.png" -o -name "*.jpg" \) | sort
+   ```
+   결과로 `existingAssets` 딕셔너리를 구성한다.
 
 1. `get_design_context` 응답에서 에셋 URL 식별:
    - 코드 내 `const image = 'https://www.figma.com/api/mcp/asset/...'`
    - `<img src={image} />` 패턴에서 URL 추출
-   - 모든 URL을 수집하고 중복을 제거한다
+   - Figma 노드 이름을 파일명으로 사용 (sanitize: 공백→`_`, 특수문자 제거)
 
-2. 분류 후 다운로드 (이미 존재하는 파일은 건너뜀):
+2. **3단계 매칭 후 다운로드 결정**:
    ```bash
    mkdir -p {projectPath}/Assets/FigmaAssets/{Icons,Images,Backgrounds,Buttons,Misc}
 
-   # 파일이 없을 때만 다운로드
+   # 기존 에셋 매칭되면 건너뜀, 신규만 다운로드
    [ ! -f {path} ] && curl -o {path} {url}
    ```
 
-3. Unity에 에셋 등록 (모든 다운로드 완료 후 1회):
+3. Unity에 에셋 등록 (신규 다운로드가 있을 때만):
    ```bash
    unity-cli editor refresh
    ```
 
-4. **Sprite 임포트 설정 (새로 다운로드한 에셋만)**:
+4. **Sprite 임포트 설정 (신규 다운로드만)**:
    ```bash
-   unity-cli asset import-texture \
-     path=Assets/FigmaAssets/Icons/icon_back.png \
-     textureType=Sprite
-
-   unity-cli asset import-texture \
-     path=Assets/FigmaAssets/Images/hero.png \
-     textureType=Sprite maxTextureSize=2048
+   unity-cli asset import-texture path=Assets/FigmaAssets/Icons/icon_new.png textureType=Sprite
    ```
+   기존 에셋은 이미 Sprite 타입이므로 건너뛴다.
 
-5. Image 생성 시 에셋 할당 (레지스트리에서 경로 참조):
+5. Image 생성 시 에셋 할당:
    ```bash
-   unity-cli ui image.create canvasName=UICanvas name=HeroImage \
-     parentName=Content spritePath=Assets/FigmaAssets/Images/hero.png \
-     preserveAspect=true size=400,300
+   # A페이지에서 다운로드한 아이콘을 B페이지에서 재사용
+   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_back.png ...
 
-   # 같은 아이콘을 여러 곳에서 재사용
-   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_back.png ...
-   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_back.png ...
+   # B페이지에서 새로 다운로드한 에셋 사용
+   unity-cli ui image.create ... spritePath=Assets/FigmaAssets/Icons/icon_settings.png ...
    ```
 
 ### 이미지 파라미터

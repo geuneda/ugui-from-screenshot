@@ -90,13 +90,29 @@ get_screenshot(fileKey=":fileKey", nodeId=":nodeId")
 
 Figma MCP가 반환한 에셋 URL에서 아이콘/이미지를 다운로드하고 Unity Sprite로 임포트한다.
 
-**0단계: 에셋 레지스트리 초기화**
+**0단계: 기존 에셋 스캔 (크로스 페이지 재사용 핵심)**
 
-다운로드할 에셋 목록을 먼저 수집하고, 중복을 제거한다.
-내부적으로 `{asset_url → local_path}` 매핑을 유지한다.
+이전 페이지 작업에서 이미 다운로드한 에셋을 탐색하여 레지스트리를 사전 구성한다.
+이 단계가 없으면 B페이지에서 A페이지의 에셋을 중복 다운로드한다.
 
+```bash
+# 기존 에셋 폴더 확인 (없으면 신규 프로젝트)
+ls {projectPath}/Assets/FigmaAssets/ 2>/dev/null
 ```
-assetRegistry = {}   # URL → Unity 에셋 경로 매핑
+
+기존 에셋이 있으면 전체 목록을 수집한다:
+```bash
+find {projectPath}/Assets/FigmaAssets -type f \( -name "*.png" -o -name "*.jpg" \) | sort
+```
+
+수집 결과로 에셋 레지스트리를 초기화한다:
+```
+existingAssets = {
+  "icon_back": "Assets/FigmaAssets/Icons/icon_back.png",
+  "icon_menu": "Assets/FigmaAssets/Icons/icon_menu.png",
+  "hero":      "Assets/FigmaAssets/Images/hero.png",
+}
+assetRegistry = {}   # 이번 세션 URL → path 매핑 (신규 + 기존 모두 등록)
 ```
 
 **1단계: 에셋 URL 추출 및 분류**
@@ -116,46 +132,56 @@ const image = 'https://www.figma.com/api/mcp/asset/550e8400-...'
 | Buttons | 버튼 내부 이미지, 이름에 btn 포함 | `Buttons/` |
 | 기타 | 위에 해당하지 않는 에셋 | `Misc/` |
 
-**2단계: 중복 확인 후 다운로드**
+**2단계: 기존 에셋 매칭 후 다운로드 결정**
 
-에셋마다 다운로드 전에 이미 존재하는지 확인한다:
+각 에셋마다 3단계 매칭을 수행한다:
 
+```
+for each (assetName, assetUrl, category) in newAssets:
+
+  # 매칭 1: 이름이 같은 기존 에셋이 있는가?
+  if assetName in existingAssets:
+    assetRegistry[assetUrl] = existingAssets[assetName]
+    → 다운로드 건너뜀 (기존 파일 재사용)
+    continue
+
+  # 매칭 2: 파일이 이미 디스크에 있는가? (이름 정규화 후 재확인)
+  normalizedName = sanitize(assetName)  # 공백→_, 특수문자 제거
+  targetPath = "Assets/FigmaAssets/{category}/{normalizedName}.png"
+  if file_exists(targetPath):
+    assetRegistry[assetUrl] = targetPath
+    → 다운로드 건너뜀
+    continue
+
+  # 매칭 실패: 신규 에셋으로 다운로드
+  curl -o {projectPath}/{targetPath} {assetUrl}
+  assetRegistry[assetUrl] = targetPath
+  newDownloads.append(targetPath)
+```
+
+폴더 구조 생성 (최초 1회):
 ```bash
-# 폴더 생성 (최초 1회)
 mkdir -p {projectPath}/Assets/FigmaAssets/{Icons,Images,Backgrounds,Buttons,Misc}
-
-# 각 에셋에 대해:
-# 1) 이미 다운로드된 에셋인지 확인
-if [ ! -f {projectPath}/Assets/FigmaAssets/Icons/{name}.png ]; then
-  curl -o {projectPath}/Assets/FigmaAssets/Icons/{name}.png {asset_url}
-fi
-```
-
-같은 URL이 여러 UI 요소에서 참조되면 한 번만 다운로드하고 경로를 재사용한다:
-```
-# 레지스트리에 등록
-assetRegistry[asset_url] = "Assets/FigmaAssets/Icons/{name}.png"
-
-# 이후 같은 URL 참조 시 레지스트리에서 경로만 가져옴
-spritePath = assetRegistry[asset_url]
 ```
 
 **3단계: Unity에 에셋 등록**
 
-모든 에셋을 다운로드한 후 한 번만 호출한다 (에셋마다 호출하지 않는다):
+신규 다운로드가 있을 때만 호출한다:
 ```bash
+# newDownloads가 비어있지 않을 때만
 unity-cli editor refresh
 ```
 
-**4단계: Sprite 임포트 설정 (필수!)**
+**4단계: Sprite 임포트 설정 (신규 에셋만)**
 
 Unity는 PNG/JPG를 기본적으로 `Default` 텍스처로 임포트한다. UGUI Image에 사용하려면 반드시 `Sprite` 타입으로 변환해야 한다.
 
-새로 다운로드한 에셋만 임포트 설정을 변경한다 (이미 Sprite인 에셋은 건너뜀):
+신규 다운로드한 에셋만 임포트 설정을 변경한다 (기존 에셋은 이미 Sprite):
 
 ```bash
-unity-cli asset import-texture path=Assets/FigmaAssets/Icons/icon_back.png textureType=Sprite
-unity-cli asset import-texture path=Assets/FigmaAssets/Images/hero.png textureType=Sprite maxTextureSize=2048
+# newDownloads에 포함된 에셋만 처리
+unity-cli asset import-texture path=Assets/FigmaAssets/Icons/icon_new.png textureType=Sprite
+unity-cli asset import-texture path=Assets/FigmaAssets/Images/hero_v2.png textureType=Sprite maxTextureSize=2048
 ```
 
 `asset.import-texture`는 이미 올바른 설정이면 재임포트를 건너뛴다 (`reimported: false`).
@@ -174,7 +200,21 @@ unity-cli ui image.create canvasName=UICanvas name=HeroImage \
 
 - `preserveAspect=true`: 원본 비율 유지 (원화/아이콘에 필수)
 - `useNativeSize=true`: 스프라이트 원본 해상도로 크기 설정
-- 같은 스프라이트를 여러 UI 요소에서 사용할 때 동일한 `spritePath` 지정
+- 같은 스프라이트를 여러 UI 요소에서, 또는 다른 페이지에서 재사용할 때 동일한 `spritePath` 지정
+
+**크로스 페이지 시나리오 예시:**
+
+```
+[Page A 작업]
+  icon_back.png → 신규 다운로드 → Assets/FigmaAssets/Icons/icon_back.png
+  hero.png      → 신규 다운로드 → Assets/FigmaAssets/Images/hero.png
+
+[Page B 작업]
+  0단계 스캔 → existingAssets = {icon_back, hero, ...}
+  icon_back.png → 이름 매칭 성공 → 다운로드 건너뜀, 기존 경로 재사용
+  icon_settings.png → 매칭 실패 → 신규 다운로드
+  hero.png → 이름 매칭 성공 → 다운로드 건너뜀, 기존 경로 재사용
+```
 
 #### Step 1A.6: 정보 추출 및 Canvas 설정
 

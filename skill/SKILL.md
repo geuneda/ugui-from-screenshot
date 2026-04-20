@@ -11,8 +11,9 @@ UI 디자인(Figma URL 또는 스크린샷)을 분석하여 unity-cli로 UGUI를
 
 ## Prerequisites
 
-- unity-cli 설치 및 Bridge 연결 상태
-- Unity Editor에 unity-connector 패키지 설치
+- unity-cli (없으면 Phase −2 에서 자동 설치)
+- .NET SDK net10.0+ (unity-cli 빌드용. macOS: `brew install --cask dotnet-sdk`)
+- Unity Editor 에 unity-connector 패키지 설치
 - 브릿지 상태 확인: `unity-cli status`
 - Figma URL 입력 시: Figma MCP 서버 연결 필요
 
@@ -42,6 +43,41 @@ bash scripts/check_update.sh --auto
 동기화 대상은 `SKILL.md`, `references/`, `scripts/`, `assets/` 만이며, 그 외 로컬 파일(예: 작업 중인 임시 데이터)은 유지된다. 완료 후 `.commit-hash`가 새 SHA로 갱신된다.
 
 **체크 실패 시**: 네트워크 오류 등으로 실패해도 워크플로우는 이전 버전으로 계속 진행한다. 단, 로그에 "스킬 업데이트 확인 실패"를 기록하고 사용자에게 공지한다.
+
+## Phase −2: unity-cli 설치 보장 (스킬 실행 시 Phase −1 직후 수행)
+
+이 스킬은 [geuneda/unity-cli](https://github.com/geuneda/unity-cli) 가 PATH 에 있어야 동작한다. **Phase 0 진입 전에 반드시** 아래 스크립트로 설치 여부를 확인하고, 없으면 자동으로 설치한다.
+
+```bash
+# 스킬 루트에서
+bash scripts/ensure_unity_cli.sh
+```
+
+동작:
+
+- PATH 에 `unity-cli` 가 있으면 그대로 종료 (재설치하지 않음)
+- 없으면 `https://github.com/geuneda/unity-cli` 를 `~/.local/share/unity-cli` 로 클론 → `dotnet publish` (self-contained, 단일 파일) → `~/.local/bin/unity-cli` 심볼릭 링크 생성
+
+옵션:
+
+- `--check` : 설치 여부만 확인 (exit 0=있음, 1=없음, 2=오류). 워크플로우에서 사전 점검용.
+- `--force` : 이미 설치되어 있어도 다시 빌드.
+- `--update` : 레포를 `origin/main` 최신으로 fast-forward 한 뒤 재빌드. 새 명령(`ui.panel.create` 등) 누락 시 사용.
+
+환경변수:
+
+- `UNITY_CLI_INSTALL_DIR` (기본 `~/.local/share/unity-cli`) : 클론/빌드 디렉토리
+- `UNITY_CLI_BIN_DIR` (기본 `~/.local/bin`) : 심볼릭 링크 위치
+
+**필수 사전조건**: `git`, `dotnet` (net10.0+ SDK). `dotnet` 이 없으면 스크립트가 설치 안내 후 즉시 종료한다.
+
+**`~/.local/bin` 이 PATH 에 없을 때**: 스크립트가 경고를 출력한다. 사용자에게 다음 줄을 셸 설정에 추가하도록 안내:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**설치 실패 시**: 빌드 로그를 출력하고 exit 2. 워크플로우는 중단하고 사용자에게 수동 설치를 안내한다 (`dotnet build src/UnityCli/UnityCli.csproj` 후 `dotnet src/UnityCli/bin/Debug/net10.0/UnityCli.dll <command>` 형태로 임시 사용 가능).
 
 ## Phase 0: Pre-flight 체크 (필수 - 실전에서 반드시 먼저 수행)
 
@@ -691,6 +727,8 @@ unity-cli ui screenshot.capture width={w} height={h} \
 
 ## Scripts
 
+- `./scripts/ensure_unity_cli.sh` -- unity-cli 설치 보장 (Phase −2). PATH 검사 → 미설치 시 GitHub 클론 + `dotnet publish` + `~/.local/bin/unity-cli` 심볼릭 링크. `--check` / `--force` / `--update` 옵션 지원.
+- `./scripts/check_update.sh` -- 스킬 자체 자동 업데이트 (Phase −1).
 - `./scripts/ui_helper.sh` -- 생성+reparent+rect 재설정 3단계 통합 헬퍼 (구버전 브릿지용). `/tmp/`에 복사해 사용.
 - `./scripts/batch_set_texts.py` -- TMP 텍스트 일괄 설정 템플릿 (쉘 이스케이프 회피).
 

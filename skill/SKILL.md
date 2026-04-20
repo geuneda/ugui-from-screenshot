@@ -11,10 +11,65 @@ UI 디자인(Figma URL 또는 스크린샷)을 분석하여 unity-cli로 UGUI를
 
 ## Prerequisites
 
-- unity-cli 설치 및 Bridge 연결 상태 (브릿지 개선 버전 필요)
+- unity-cli 설치 및 Bridge 연결 상태
 - Unity Editor에 unity-connector 패키지 설치
 - 브릿지 상태 확인: `unity-cli status`
 - Figma URL 입력 시: Figma MCP 서버 연결 필요
+
+## Repository & Auto-Update
+
+이 스킬은 [geuneda/ugui-from-screenshot](https://github.com/geuneda/ugui-from-screenshot) 레포의 `skill/` 디렉토리와 동기화된다. 다른 PC에서 개선 후 push하면 여기서 `check_update.sh`로 끌어올 수 있다.
+
+- 레포: `https://github.com/geuneda/ugui-from-screenshot` (public, `main` 브랜치)
+- 원격 스킬 경로: `skill/`
+- 로컬 버전 파일: `.commit-hash` (현재 반영된 원격 커밋 SHA)
+
+### Phase −1: 업데이트 체크 (스킬 실행 시 최우선 수행)
+
+Phase 0 이전에 **반드시** 업데이트 여부를 확인한다. 원격 main HEAD가 로컬 `.commit-hash`와 다르면 최신 변경을 반영한 뒤 워크플로우를 시작해야 한다.
+
+**자동 체크 & 적용**:
+
+```bash
+# 스킬 루트에서
+bash scripts/check_update.sh --auto
+```
+
+- `--auto`: 변경이 있으면 확인 없이 자동 업데이트 (권장, 비파괴적 — 기존 파일은 `.backup-<timestamp>/` 로 보관)
+- 옵션 없이 실행하면 인터랙티브(y/N 확인)
+- `--check`: exit code로만 상태 반환 (0=최신, 1=업데이트 있음, 2=오류)
+
+동기화 대상은 `SKILL.md`, `references/`, `scripts/`, `assets/` 만이며, 그 외 로컬 파일(예: 작업 중인 임시 데이터)은 유지된다. 완료 후 `.commit-hash`가 새 SHA로 갱신된다.
+
+**체크 실패 시**: 네트워크 오류 등으로 실패해도 워크플로우는 이전 버전으로 계속 진행한다. 단, 로그에 "스킬 업데이트 확인 실패"를 기록하고 사용자에게 공지한다.
+
+## Phase 0: Pre-flight 체크 (필수 - 실전에서 반드시 먼저 수행)
+
+브릿지 버전마다 지원 명령이 다르다. 시작 전 **지원 명령 확인**하고 누락된 기능은 Editor 스크립트로 대체.
+
+```bash
+unity-cli status
+unity-cli tool list | grep -E "(ui\.|component|gameobject|menu|editor)"
+```
+
+**필수 확인 명령 (없으면 우회 전략 적용)**:
+
+| 명령 | 있으면 | 없으면 우회 |
+|------|--------|-------------|
+| `ui panel.create` | 그대로 사용 | `ui image.create color=#00000000` |
+| `ui recttransform.modify` | 그대로 사용 | `component update type=UnityEngine.RectTransform values=...` |
+| `ui layout.add` | 그대로 사용 | `component update type=UnityEngine.UI.VerticalLayoutGroup values=...` |
+| `ui screenshot.capture` | 그대로 사용 | `assets/GameViewCapture.cs` 복사 후 메뉴 실행 |
+| `editor gameview.resize` | 그대로 사용 | 캡처 스크립트에서 RT 크기 지정 |
+
+**빠지면 안 되는 사전 준비**:
+1. 현재 씬 확인 (`unity-cli scene info`) → **BootScene 등 중요 씬 건드리지 말 것**. 새 씬 생성 (`scene create path=...`) 권장
+2. 기존 UI 계층 조회 (`unity-cli resource get ui/hierarchy`) → 충돌 방지
+3. 프로젝트 기준 해상도 확인 (프로젝트 CLAUDE.md 또는 기존 Canvas의 referenceResolution)
+4. 플랫 화이트 스프라이트 경로 탐색 (`find Assets -name "*White*.png" -o -name "*Flat*.png"`) → 각진 사각형용
+5. 스킬의 `scripts/ui_helper.sh`를 `/tmp/`로 복사 (아래 생성 워크플로우에서 사용)
+
+**상세 내용**: `references/unity-cli-gotchas.md` 참조 (모든 시행착오 정리).
 
 ## 입력 소스 판별
 
@@ -385,37 +440,73 @@ unity-cli ui layout.add name=ContentSection layoutType=Horizontal \
 
 부모 → 자식 순서로 생성. **모든 요소에 적절한 앵커를 사용한다.**
 
+#### 2.4.a: 명령이 모두 지원되는 최신 브릿지
+
 ```bash
-# 1. 상단 바 (가로 스트레치, 고정 높이)
-unity-cli ui panel.create canvasName=UICanvas name=Header \
+unity-cli ui panel.create canvasName=UICanvas name=Header parentName=Card \
   anchorMin=0,1 anchorMax=1,1 pivot=0.5,1 \
   anchoredPosition=0,0 size=0,{headerHeight} color={headerColor}
-
-# 2. 콘텐츠 영역 (상하 바 사이 스트레치)
-unity-cli ui panel.create canvasName=UICanvas name=Content \
-  anchorMin=0,0 anchorMax=1,1 pivot=0.5,0.5
-unity-cli ui recttransform.modify name=Content \
-  offsetMin=0,{bottomBarH} offsetMax=0,-{headerH}
-
-# 3. 중앙 카드 (고정 크기, center anchor)
-unity-cli ui panel.create canvasName=UICanvas name=Card \
-  parentName=Content anchorMin=0.5,0.5 anchorMax=0.5,0.5 \
-  anchoredPosition=0,0 size={w},{h} color={cardColor}
-
-# 4. 카드 내부 2-column (비율 앵커)
-unity-cli ui panel.create canvasName=UICanvas name=LeftCol \
-  parentName=Card anchorMin=0,0 anchorMax=0.568,1 pivot=0.5,0.5
-unity-cli ui recttransform.modify name=LeftCol offsetMin=24,24 offsetMax=-12,0
-
-unity-cli ui panel.create canvasName=UICanvas name=RightCol \
-  parentName=Card anchorMin=0.594,0 anchorMax=1,1 pivot=0.5,0.5
-unity-cli ui recttransform.modify name=RightCol offsetMin=12,24 offsetMax=-24,0
-
-# 5. 하단 바 (가로 스트레치, 고정 높이)
-unity-cli ui panel.create canvasName=UICanvas name=Footer \
-  anchorMin=0,0 anchorMax=1,0 pivot=0.5,0 \
-  anchoredPosition=0,0 size=0,{footerH} color={footerColor}
 ```
+
+#### 2.4.b: 구버전 브릿지 (panel.create / recttransform.modify / layout.add 없음)
+
+**실전에서 자주 부딪히는 경우. 아래 3단계 패턴을 모든 UI 요소에 적용한다.**
+
+**부모 지정 3단계 (필수)**: `ui.*.create`의 `parentName`/`parentId`는 조용히 무시되어 항상 Canvas 아래에 생성된다. 또한 `gameobject reparent`는 RectTransform을 망가뜨린다. 따라서:
+
+1. 생성 (Canvas 아래로 감)
+2. `gameobject reparent name=X parentId=<부모_id> worldPositionStays=false`
+3. `component update name=X type=UnityEngine.RectTransform values=...`로 rect 재설정
+
+**헬퍼 사용**: 스킬의 `scripts/ui_helper.sh`를 `/tmp/`로 복사해 사용. 한 번에 3단계를 처리하고 새 InstanceID를 반환한다.
+
+```bash
+# 헬퍼 준비 (작업 시작 시 1회)
+cp "$(dirname $(which unity-cli))/../skills/ugui-from-screenshot/scripts/ui_helper.sh" /tmp/ui_helper.sh
+chmod +x /tmp/ui_helper.sh
+
+# Canvas 생성 (최상위, reparent 불필요)
+unity-cli ui canvas.create name=UICanvas referenceResolution=1440,3040 screenMatchMode=Expand
+# -> result.id 를 CANVAS_ID 에 저장 (예: -37324)
+
+# MainCard: Canvas 자식으로 중앙 배치 (984x666 center)
+MAINCARD_ID=$(/tmp/ui_helper.sh create_ui image MainCard $CANVAS_ID 0.5 0.5 0.5 0.5 0.5 0.5 0 0 984 666 color=#FFFFFFEB)
+
+# Header: MainCard의 좌상단 기준 (32, -32) 위치
+HEADER_ID=$(/tmp/ui_helper.sh create_ui image Header $MAINCARD_ID 0 1 0 1 0 1 32 -32 918 77 color=#00000000)
+```
+
+**반응형 앵커 공식**은 Step 2.2에 정리되어 있으나, 실전 경험상 **카드형 고정 UI**는 단순 매핑이 훨씬 빠르다:
+- 자식 요소: `anchor=(0,1)`, `pivot=(0,1)` (부모 좌상단)
+- `anchoredPosition = (figma.x, -figma.y)` (Y 부호 반전)
+- `sizeDelta = (figma.w, figma.h)`
+
+반응형이 진짜 필요할 때만 Step 2.2/2.3의 스트레치 앵커 전략을 개별 적용.
+
+#### 2.4.c: 텍스트 내용 설정 (쉘 이스케이프 주의)
+
+**버그**: `unity-cli ui text.create text="MCP Import Smoke"`는 bash 분리로 "MCP"만 전달됨.
+
+**해결**: 생성 시엔 임시값("X")로 만들고, 완료 후 Python에서 JSON으로 일괄 업데이트.
+- 템플릿: `scripts/batch_set_texts.py`
+- 속성명은 `text` (NOT `m_text`)
+- 검증: `unity-cli resource get ui/hierarchy` 로 실제 반영 확인
+
+#### 2.4.d: TMP 오버플로우 처리
+
+TMP 기본 `overflowMode`는 `Ellipsis`(1)이라 긴 텍스트가 "..."로 잘린다. 반드시:
+- `textWrappingMode = Normal` (1)
+- `overflowMode = Overflow` (0)
+
+**Editor 스크립트로 일괄 처리 권장** (JSON 설정만으론 mesh 리빌드 누락 케이스 존재):
+- 템플릿: `assets/FixTMPSettings.cs` → 프로젝트 `Assets/_Project/Scripts/Editor/`에 복사
+- 실행: `unity-cli menu execute path="Tools/Fix TMP Overflow Settings"`
+
+#### 2.4.e: 기본 UISprite를 평면 스프라이트로 교체
+
+`ui.image.create`로 만든 Image는 sprite=null이지만 Unity가 둥근 UISprite로 렌더할 수 있다. 각진 사각형을 원하면 프로젝트의 1x1 화이트 스프라이트로 교체:
+- 템플릿: `assets/ReplaceUISprites.cs` → `TargetSpritePath` 프로젝트에 맞게 수정 후 복사
+- 실행: `unity-cli menu execute path="Tools/Replace UI Images With Flat Sprite"`
 
 ### Step 2.5: 리소스 매칭
 
@@ -430,11 +521,27 @@ unity-cli ui panel.create canvasName=UICanvas name=Footer \
 
 ### Step 3.1: 캡처
 
+**구버전 브릿지**: `ui.screenshot.capture` / `editor.gameview.resize`가 없다. 스킬의 `assets/GameViewCapture.cs`를 프로젝트 `Assets/_Project/Scripts/Editor/`에 복사한 뒤 메뉴 실행:
+
 ```bash
-unity-cli editor gameview.resize width={refWidth} height={refHeight}
-unity-cli ui screenshot.capture width={refWidth} height={refHeight} \
-  outputPath=Assets/Screenshots/verify_{n}.png
+# 1회 준비: 스크립트 복사 후 컴파일 (브릿지가 일시적으로 끊김 → sleep 필요)
+cp ~/.claude/skills/ugui-from-screenshot/assets/GameViewCapture.cs Assets/_Project/Scripts/Editor/
+unity-cli editor compile && sleep 3
+
+# 캡처 (전체 Canvas)
+unity-cli menu execute path="Tools/Capture Game View"
+# → Assets/_Temp/GameCapture.png (1440x3040)
+
+# 카드만 (비교 시 편리)
+unity-cli menu execute path="Tools/Capture Card Only"
+# → Assets/_Temp/CardCapture.png (984x666)
 ```
+
+**캡처 주의**:
+- Overlay Canvas는 카메라로 렌더 안 됨 → 스크립트 내부에서 ScreenSpaceCamera로 **임시 전환 후 원복**
+- CanvasScaler가 ScaleWithScreenSize면 Screen.width/height와 RT 불일치로 축소됨 → 스크립트 내부에서 ConstantPixelSize(1.0)로 **임시 전환 후 원복**
+- GameView RT 직접 캡처 시엔 **상하 반전** 발생 → 스크립트에서 플립 필요
+- 캡처 실패 시 씬이 임시 상태로 저장되면 안 됨 → 스크립트에서 반드시 원복 보장
 
 ### Step 3.2: 비교
 
@@ -576,7 +683,21 @@ unity-cli ui screenshot.capture width={w} height={h} \
 
 ## References
 
-- `./references/new-commands.md` -- 추가 unity-cli 명령어 레퍼런스
+- `./references/unity-cli-gotchas.md` -- **필독**. 실제 브릿지 시행착오 및 우회 방법
+- `./references/new-commands.md` -- 최신 unity-cli 명령어 레퍼런스 (구버전은 위 gotchas 참조)
 - `./references/anchoring-strategy.md` -- 반응형 앵커링 패턴 가이드
 - `./references/resolution-profiles.md` -- 다해상도 검증 프로파일
 - `./references/figma-to-ugui-mapping.md` -- Figma 속성 → UGUI 매핑 상세
+
+## Scripts
+
+- `./scripts/ui_helper.sh` -- 생성+reparent+rect 재설정 3단계 통합 헬퍼 (구버전 브릿지용). `/tmp/`에 복사해 사용.
+- `./scripts/batch_set_texts.py` -- TMP 텍스트 일괄 설정 템플릿 (쉘 이스케이프 회피).
+
+## Assets
+
+프로젝트 `Assets/_Project/Scripts/Editor/`에 복사해 사용:
+
+- `./assets/GameViewCapture.cs` -- `Tools/Capture Game View`, `Tools/Capture Card Only` 메뉴 제공
+- `./assets/FixTMPSettings.cs` -- 모든 TMP의 overflow/wrap 일괄 수정 (Ellipsis 방지)
+- `./assets/ReplaceUISprites.cs` -- 모든 UI Image의 sprite를 평면 화이트로 일괄 교체 (둥근 UISprite 제거). `TargetSpritePath`를 프로젝트에 맞게 수정 필요.

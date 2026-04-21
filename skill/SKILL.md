@@ -241,11 +241,16 @@ bash scripts/run_unity_to_figma_sync.sh
 - `UGUI_FIGMA_REPORT_PATH=...` : 리포트 출력 경로 변경 (기본 `Assets/_Temp/UnityToFigmaReport.json`)
 - `UGUI_FIGMA_KEEP_CONTEXT=true` : 디버깅용. 부트스트랩이 `Library/UguiFigmaContext.json` 을 삭제하지 않음 (PAT 평문 노출 주의)
 - `UGUI_FIGMA_DEFAULT_SCREEN=MainScreen` : 후속 `Instantiate Default Screen` 메뉴가 띄울 Screen prefab 이름. ContextFile 의 `"defaultScreenName"` 키와 동등. ContextFile 이 sync 후 자동 삭제되므로 부트스트랩이 이 값을 EditorPrefs(`ugui.figma.defaultScreenName`) 로 영속화하여 Sync 이후에도 사용한다.
+- `UGUI_FIGMA_SELECTED_PAGES='Page 3 - Settings Test|Lobby'` : (선택) 특정 페이지만 임포트. **`|` 로 구분.** ContextFile 의 `"selectedPages": ["Page 3 - Settings Test"]` 키와 동등. 셸 스크립트가 자동으로 `PreparePageSelection` 메뉴를 sync 직전에 호출하여 페이지 메타를 다운로드하고 매칭만 `Selected=true` 로 설정한다. 매칭은 정확 이름 (case-insensitive) 또는 `'Prefix*'` 와일드카드. **다른 페이지의 prefab 자동 생성을 막고 싶을 때 필수** — 검증 결과: 8 → 2 prefab. (2026-04-21 검증)
+- `UGUI_FIGMA_KOREAN_FONT_PATH='Assets/Fonts/NotoSansKR-Regular.ttf'` : (선택) 한글 폰트 SDF 자동 생성 + TMP fallback 등록 시 사용할 폰트 경로. ContextFile 의 `"koreanFontPath"` 키와 동등. 별도로 `Setup TMP Korean Fallback` 메뉴를 호출해야 적용됨 (Step 1A.5c 참고).
 
 ContextFile (`Library/UguiFigmaContext.json`) 에 추가로 둘 수 있는 키:
 - `"cleanOtherScreens"` (bool, 기본 true) : 씬 내 다른 Screen prefab 인스턴스 자동 정리
 - `"clearCanvasOnInstantiate"` (bool, 기본 true) : 대상 Canvas 자식 모두 비움 (한 화면만 보이게)
 - `"syncGameViewAspect"` (bool, 기본 true) : GameView 종횡비를 prefab 사이즈에 맞춤
+- `"selectedPages"` (string[]) : 특정 페이지만 임포트할 때 사용. `UGUI_FIGMA_SELECTED_PAGES` 와 동등.
+- `"koreanFontPath"` (string) : `Setup TMP Korean Fallback` 메뉴가 사용할 폰트 경로.
+- `"koreanFontSdfOutputPath"` (string) : 자동 생성된 SDF asset 저장 경로 (기본: 폰트 파일과 같은 폴더 + `_SDF.asset`).
 
 **PAT 재사용 (검증됨, 2026-04-21)**: 첫 실행 시 부트스트랩이 PAT 을 PlayerPrefs(`FIGMA_PERSONAL_ACCESS_TOKEN`) 에 저장한다. 두 번째 실행부터는 `FIGMA_PAT` 환경변수를 **비워두거나 아예 안 줘도** `run_unity_to_figma_sync.sh` 가 폴백을 안내만 하고 진행한다 (부트스트랩이 ContextFile → Env → EditorPrefs → PlayerPrefs → 기존 settings 순으로 자동 채움). 다른 디자인 파일을 임포트할 때는 `FIGMA_DOCUMENT_URL` 만 바꿔서 재실행하면 된다.
 
@@ -339,6 +344,42 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Capture Default Screen
 6. Canvas/CanvasScaler 상태 원복 + 임시 카메라 destroy
 
 GameView 종횡비 동기화가 잘 동작하는 환경에서는 굳이 안 써도 되지만, 멀티 해상도 검증용 PNG 를 받고 싶을 때 유용하다.
+
+#### Step 1A.5c: 한글 폰트 fallback 자동 등록 (선택, 한글 텍스트가 있는 디자인 전용)
+
+UnityToFigma 가 다운로드하는 Inter / Roboto 등의 SDF 에는 한글 글리프가 없어서 한국어 텍스트가 `□□□` (tofu) 로 표시된다. **자동 다운로드는 하지 않지만(라이선스)**, 사용자가 폰트 파일만 프로젝트에 두면 부트스트랩이 SDF 생성 + TMP fallback 등록까지 한 번에 처리한다 (검증됨, 2026-04-21).
+
+준비:
+
+1. 한글 폰트 (.ttf 또는 .otf) 를 프로젝트에 배치. 라이선스가 자유로운 옵션:
+   - **NotoSansKR** (Google Fonts, SIL OFL 1.1): `https://github.com/google/fonts/raw/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf`
+   - **Pretendard** (SIL OFL 1.1): `https://github.com/orioncactus/pretendard`
+2. 권장 경로: `Assets/Fonts/NotoSansKR-Regular.ttf` (자동 탐색 패턴에 일치)
+3. Unity 임포트 완료 대기
+
+실행:
+
+```bash
+unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Setup TMP Korean Fallback"
+```
+
+이 메뉴는 다음을 멱등하게 처리한다:
+
+1. `koreanFontPath` (ContextFile/UGUI_FIGMA_KOREAN_FONT_PATH) 또는 자동 탐색 (`Assets/Fonts/Noto*KR*.ttf`, `Pretendard*.ttf`, `*Korean*.ttf`, `*KR*.ttf`, `Nanum*.ttf` 순) 으로 폰트 결정
+2. 같은 폴더에 `<FontName>_SDF.asset` 가 있으면 재사용, 없으면 `TMP_FontAsset.CreateFontAsset(font, 90, 9, SDFAA, 1024, 1024, AtlasPopulationMode.Dynamic, true)` 로 **Dynamic SDF** 생성. Dynamic 이라 한글 글리프가 런타임에 자동 생성된다 (사전 글리프 등록 불필요).
+3. `TMP_Settings.fallbackFontAssets` (글로벌 fallback) 에 SDF 추가
+4. `Assets/Figma/Fonts/*.asset` (UnityToFigma 가 만든 Inter SDF 등) 의 `m_FallbackFontAssetTable` 에도 SDF 추가 (per-asset fallback)
+
+기대 로그:
+
+```
+[UnityToFigmaBootstrap] Korean SDF 생성: Assets/Fonts/NotoSansKR-Regular_SDF.asset (Dynamic, source=NotoSansKR-Regular.ttf)
+[UnityToFigmaBootstrap] TMP Korean Fallback 적용 완료. globalFallbackAdded=1, perAssetFallbackAdded=3
+```
+
+이후 `Capture Default Screen` 으로 캡처하면 한글이 정상 렌더링된다 (검증: "환경 설정", "사용자닉네임", "레벨 99 · 마법사", "소리/진동/알림", "저장하기" 모두 정상). fallback 등록 후에는 `Setup TMP Korean Fallback` 을 다시 호출해도 멱등 (added=0).
+
+폰트가 없으면 Debug.LogWarning 으로 안내만 하고 종료 (다이얼로그 없음 → 자동화 안전).
 
 #### Step 1A.6: 레퍼런스 스크린샷 (선택, 검증용)
 

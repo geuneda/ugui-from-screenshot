@@ -129,6 +129,193 @@ namespace UguiFromScreenshot.Editor
                 "BuildPrototypeFlow=" + GetBuildPrototypeFlow(settings));
         }
 
+        // ----------------------------------------------------------------- Page Selection
+        //
+        // ContextFile.selectedPages (string[]) 가 있으면 OnlyImportSelectedPages=true 로 켜고
+        // settings.PageDataList 에서 매칭되는 페이지만 Selected=true 로 설정한다.
+        // 매칭 규칙: 정확 이름 (case-insensitive) 또는 끝에 '*' 와일드카드 prefix.
+        //
+        // PageDataList 는 UnityToFigma 가 처음 sync 시 RefreshForUpdatedPages 로 채우는데,
+        // 비어있으면 다이얼로그로 ReportError 가 뜬다 (다이얼로그 회피 정책 위반).
+        // 이 메뉴는 UnityToFigmaSettingsPageSelectionHelper.RefreshPageListAsync 를 reflection 으로 호출해
+        // PageDataList 를 비동기로 채운 뒤 EditorApplication.update 폴링으로 완료를 감지하고
+        // selectedPages 매칭만 Selected=true 로 정리한다.
+        //
+        // selectedPages 가 비어있으면 OnlyImportSelectedPages=false 로 명시적 해제 후 즉시 종료.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Prepare Page Selection", priority = 3)]
+        public static void PreparePageSelection()
+        {
+            LoadContextFileIfPresent();
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] settings 에셋을 찾지 못해 PageSelection 준비 실패.");
+                return;
+            }
+
+            // PAT 적용 (RefreshPageListAsync 가 다운로드를 위해 필요)
+            ApplyPatFromAllSources();
+
+            var requested = ContextStringList("selectedPages");
+            if (requested == null || requested.Count == 0)
+            {
+                SetField(settings, "OnlyImportSelectedPages", false);
+                ClearPageDataList(settings);
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssetIfDirty(settings);
+                Debug.Log("[UnityToFigmaBootstrap] selectedPages 미지정 → 모든 페이지 임포트 모드로 정상화.");
+                s_PageSelectionPending = false;
+                return;
+            }
+
+            // OnlyImportSelectedPages 켜고 페이지 목록 다운로드 트리거
+            SetField(settings, "OnlyImportSelectedPages", true);
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssetIfDirty(settings);
+
+            var helperType = FindType("UnityToFigma.Editor.Settings.UnityToFigmaSettingsPageSelectionHelper");
+            if (helperType == null)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] PageSelectionHelper 타입 미발견.");
+                return;
+            }
+            var refreshMethod = helperType.GetMethod("RefreshPageListAsync", BindingFlags.Static | BindingFlags.Public);
+            if (refreshMethod == null)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] RefreshPageListAsync 미발견.");
+                return;
+            }
+
+            // 기존 PageDataList 비우고 재요청 → 다운로드 후 RefreshForUpdatedPages 가 다시 채움
+            ClearPageDataList(settings);
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssetIfDirty(settings);
+
+            s_PageSelectionRequested = requested;
+            s_PageSelectionStartedAt = EditorApplication.timeSinceStartup;
+            s_PageSelectionPending = true;
+            EditorApplication.update += OnPageSelectionTick;
+
+            try
+            {
+                refreshMethod.Invoke(null, new object[] { settings });
+                Debug.Log($"[UnityToFigmaBootstrap] PageSelection 다운로드 시작 (요청 {requested.Count} 개): " +
+                          string.Join(", ", requested));
+            }
+            catch (Exception e)
+            {
+                EditorApplication.update -= OnPageSelectionTick;
+                s_PageSelectionPending = false;
+                Debug.LogError("[UnityToFigmaBootstrap] PageSelection 다운로드 호출 실패: " + e);
+            }
+        }
+
+        private static void OnPageSelectionTick()
+        {
+            if (!s_PageSelectionPending)
+            {
+                EditorApplication.update -= OnPageSelectionTick;
+                return;
+            }
+            var elapsed = EditorApplication.timeSinceStartup - s_PageSelectionStartedAt;
+            if (elapsed > 60d)
+            {
+                EditorApplication.update -= OnPageSelectionTick;
+                s_PageSelectionPending = false;
+                Debug.LogError("[UnityToFigmaBootstrap] PageSelection 다운로드 60s 안에 완료되지 않음. 네트워크/PAT 확인.");
+                return;
+            }
+
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null) return;
+            var pageList = GetPageDataList(settings);
+            if (pageList == null || pageList.Count == 0) return;
+
+            // PageDataList 가 채워졌다 → selectedPages 매칭 적용
+            EditorApplication.update -= OnPageSelectionTick;
+            s_PageSelectionPending = false;
+
+            int selectedCount = 0;
+            int totalCount = pageList.Count;
+            var matchedNames = new List<string>();
+            var unmatchedRequested = new List<string>(s_PageSelectionRequested);
+
+            foreach (var entry in pageList)
+            {
+                var nameField = entry.GetType().GetField("Name");
+                var selField = entry.GetType().GetField("Selected");
+                if (nameField == null || selField == null) continue;
+
+                var pageName = nameField.GetValue(entry) as string ?? "";
+                bool match = false;
+                foreach (var pattern in s_PageSelectionRequested)
+                {
+                    if (MatchPageName(pageName, pattern))
+                    {
+                        match = true;
+                        unmatchedRequested.Remove(pattern);
+                        break;
+                    }
+                }
+                selField.SetValue(entry, match);
+                if (match)
+                {
+                    selectedCount++;
+                    matchedNames.Add(pageName);
+                }
+            }
+
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssetIfDirty(settings);
+            Debug.Log($"[UnityToFigmaBootstrap] PageSelection 적용 완료: " +
+                      $"selected={selectedCount}/{totalCount}, matched=[{string.Join(", ", matchedNames)}]" +
+                      (unmatchedRequested.Count > 0 ? $", unmatched=[{string.Join(", ", unmatchedRequested)}]" : ""));
+
+            if (selectedCount == 0)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] PageSelection 매칭된 페이지가 없습니다. " +
+                               "selectedPages 패턴을 점검하세요. (정확 이름 또는 'Prefix*' 와일드카드)");
+            }
+        }
+
+        private static bool MatchPageName(string name, string pattern)
+        {
+            if (string.IsNullOrEmpty(pattern)) return false;
+            if (pattern.EndsWith("*", StringComparison.Ordinal))
+            {
+                var prefix = pattern.Substring(0, pattern.Length - 1);
+                return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            }
+            return string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static System.Collections.IList GetPageDataList(UnityEngine.Object settings)
+        {
+            var f = settings.GetType().GetField("PageDataList", BindingFlags.Public | BindingFlags.Instance);
+            if (f == null) return null;
+            return f.GetValue(settings) as System.Collections.IList;
+        }
+
+        private static void ClearPageDataList(UnityEngine.Object settings)
+        {
+            var list = GetPageDataList(settings);
+            list?.Clear();
+        }
+
+        private static void ApplyPatFromAllSources()
+        {
+            var pat = ResolvePat();
+            if (!string.IsNullOrEmpty(pat) && PlayerPrefs.GetString(FIGMA_PAT_PREF_KEY) != pat)
+            {
+                PlayerPrefs.SetString(FIGMA_PAT_PREF_KEY, pat);
+                PlayerPrefs.Save();
+            }
+        }
+
+        private static List<string> s_PageSelectionRequested;
+        private static double s_PageSelectionStartedAt;
+        private static bool s_PageSelectionPending;
+
         // ----------------------------------------------------------------- Sync
 
         [MenuItem("Tools/UnityToFigma Bootstrap/Sync Document", priority = 2)]
@@ -652,6 +839,226 @@ namespace UguiFromScreenshot.Editor
             CaptureSceneCanvases(width, height, outputRel, prefab.name);
         }
 
+        // ----------------------------------------------------------------- TMP Korean Fallback
+        //
+        // 정책:
+        // - 자동 *다운로드* 는 안 한다 (라이선스). 사용자가 폰트 파일만 프로젝트에 가져다 두면
+        //   부트스트랩이 SDF 생성 + TMP_Settings.fallbackFontAssets 자동 등록까지 처리한다.
+        // - SDF 는 AtlasPopulationMode.Dynamic 로 만든다. 한글 글리프가 런타임에 자동 생성된다.
+        // - 같은 이름의 SDF 가 이미 있으면 재사용 (멱등).
+        //
+        // ContextFile 키:
+        //   "koreanFontPath": "Assets/Fonts/NotoSansKR-Regular.ttf"      (선택; 없으면 자동 탐색)
+        //   "koreanFontSdfOutputPath": "Assets/Fonts/NotoSansKR_SDF.asset" (선택; 기본 = 같은 폴더 + _SDF.asset)
+        //
+        // 자동 탐색 패턴 (koreanFontPath 미지정 시):
+        //   Assets/Fonts/Noto*KR*.ttf, Assets/Fonts/Noto*KR*.otf, Assets/Fonts/*Korean*.ttf,
+        //   Assets/Fonts/*Korean*.otf, Assets/Fonts/Pretendard*.ttf 등
+        [MenuItem("Tools/UnityToFigma Bootstrap/Setup TMP Korean Fallback", priority = 24)]
+        public static void SetupTmpKoreanFallback()
+        {
+            LoadContextFileIfPresent();
+            var fontPath = ContextString("koreanFontPath") ?? AutoDiscoverKoreanFontPath();
+            if (string.IsNullOrEmpty(fontPath))
+            {
+                Debug.LogWarning(
+                    "[UnityToFigmaBootstrap] 한글 폰트 파일을 찾지 못했습니다. " +
+                    "Assets/Fonts/ 에 NotoSansKR / Pretendard / NanumGothic 등 한글 글리프가 포함된 .ttf/.otf 를 두거나, " +
+                    "ContextFile 에 \"koreanFontPath\": \"Assets/Path/Font.ttf\" 를 명시하세요.");
+                return;
+            }
+            if (!File.Exists(fontPath))
+            {
+                Debug.LogError($"[UnityToFigmaBootstrap] 폰트 파일이 존재하지 않습니다: {fontPath}");
+                return;
+            }
+
+            var font = AssetDatabase.LoadAssetAtPath<Font>(fontPath);
+            if (font == null)
+            {
+                Debug.LogError($"[UnityToFigmaBootstrap] Font 로드 실패: {fontPath}. " +
+                               ".ttf/.otf 가 Asset 으로 임포트되어 있는지 확인하세요.");
+                return;
+            }
+
+            var outputPath = ContextString("koreanFontSdfOutputPath");
+            if (string.IsNullOrEmpty(outputPath))
+            {
+                var dir = Path.GetDirectoryName(fontPath);
+                var name = Path.GetFileNameWithoutExtension(fontPath);
+                outputPath = $"{dir}/{name}_SDF.asset";
+            }
+
+            var fontAssetType = FindType("TMPro.TMP_FontAsset");
+            if (fontAssetType == null)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] TMP_FontAsset 타입 미발견. TextMeshPro 패키지 확인.");
+                return;
+            }
+
+            UnityEngine.Object sdf = AssetDatabase.LoadAssetAtPath(outputPath, fontAssetType);
+            if (sdf == null)
+            {
+                sdf = CreateDynamicTmpFontAsset(fontAssetType, font);
+                if (sdf == null)
+                {
+                    Debug.LogError("[UnityToFigmaBootstrap] TMP_FontAsset 생성 실패 (CreateFontAsset 시그니처 미발견).");
+                    return;
+                }
+                Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
+                AssetDatabase.CreateAsset(sdf, outputPath);
+                AssetDatabase.SaveAssets();
+                Debug.Log($"[UnityToFigmaBootstrap] Korean SDF 생성: {outputPath} (Dynamic, source={Path.GetFileName(fontPath)})");
+            }
+            else
+            {
+                Debug.Log($"[UnityToFigmaBootstrap] Korean SDF 재사용: {outputPath}");
+            }
+
+            int registered = RegisterTmpGlobalFallback(sdf);
+            int perAssetAdded = AddFallbackToImportedSdfs(sdf);
+            Debug.Log($"[UnityToFigmaBootstrap] TMP Korean Fallback 적용 완료. " +
+                      $"globalFallbackAdded={registered}, perAssetFallbackAdded={perAssetAdded}");
+        }
+
+        private static string AutoDiscoverKoreanFontPath()
+        {
+            // 1) 대표적인 한글 폰트 이름 우선
+            string[] preferredPatterns = {
+                "Assets/Fonts/NotoSansKR*.ttf",
+                "Assets/Fonts/NotoSansKR*.otf",
+                "Assets/Fonts/Noto*KR*.ttf",
+                "Assets/Fonts/Noto*KR*.otf",
+                "Assets/Fonts/Pretendard*.ttf",
+                "Assets/Fonts/Pretendard*.otf",
+                "Assets/Fonts/NanumGothic*.ttf",
+                "Assets/Fonts/Nanum*.ttf",
+                "Assets/Fonts/*Korean*.ttf",
+                "Assets/Fonts/*Korean*.otf",
+                "Assets/Fonts/*KR*.ttf",
+                "Assets/Fonts/*KR*.otf",
+            };
+            string projectRoot = Directory.GetCurrentDirectory();
+            foreach (var pattern in preferredPatterns)
+            {
+                var dir = Path.Combine(projectRoot, Path.GetDirectoryName(pattern));
+                if (!Directory.Exists(dir)) continue;
+                var matches = Directory.GetFiles(dir, Path.GetFileName(pattern), SearchOption.TopDirectoryOnly);
+                if (matches.Length > 0)
+                {
+                    var rel = "Assets" + matches[0].Substring(Path.Combine(projectRoot, "Assets").Length).Replace('\\', '/');
+                    return rel;
+                }
+            }
+            return null;
+        }
+
+        private static UnityEngine.Object CreateDynamicTmpFontAsset(Type fontAssetType, Font font)
+        {
+            // CreateFontAsset(Font font, int samplingPointSize, int atlasPadding, GlyphRenderMode renderMode,
+            //                 int atlasWidth, int atlasHeight, AtlasPopulationMode atlasPopulationMode,
+            //                 bool enableMultiAtlasSupport)
+            // 여러 시그니처를 reflection 으로 시도. 첫 매칭 사용.
+            var renderModeType = FindType("UnityEngine.TextCore.LowLevel.GlyphRenderMode");
+            var atlasModeType = FindType("TMPro.AtlasPopulationMode");
+
+            if (renderModeType != null && atlasModeType != null)
+            {
+                var fullSig = fontAssetType.GetMethod("CreateFontAsset", BindingFlags.Static | BindingFlags.Public, null,
+                    new[] { typeof(Font), typeof(int), typeof(int), renderModeType, typeof(int), typeof(int), atlasModeType, typeof(bool) }, null);
+                if (fullSig != null)
+                {
+                    var sdfaa = TryGetEnumValue(renderModeType, "SDFAA"); // SDF + Anti-Aliased
+                    var dynamicMode = TryGetEnumValue(atlasModeType, "Dynamic");
+                    if (sdfaa != null && dynamicMode != null)
+                    {
+                        return (UnityEngine.Object)fullSig.Invoke(null, new object[]
+                        {
+                            font,         // font
+                            90,           // samplingPointSize
+                            9,            // atlasPadding
+                            sdfaa,        // renderMode
+                            1024, 1024,   // atlas size
+                            dynamicMode,  // populationMode = Dynamic (한글 자동 글리프 생성)
+                            true,         // enableMultiAtlasSupport
+                        });
+                    }
+                }
+            }
+
+            // 폴백: 가장 단순한 (Font) 만 받는 시그니처
+            var simple = fontAssetType.GetMethod("CreateFontAsset", BindingFlags.Static | BindingFlags.Public, null,
+                new[] { typeof(Font) }, null);
+            if (simple != null)
+            {
+                return (UnityEngine.Object)simple.Invoke(null, new object[] { font });
+            }
+            return null;
+        }
+
+        private static object TryGetEnumValue(Type enumType, string name)
+        {
+            try { return Enum.Parse(enumType, name); }
+            catch { return null; }
+        }
+
+        private static int RegisterTmpGlobalFallback(UnityEngine.Object sdfFontAsset)
+        {
+            var settingsType = FindType("TMPro.TMP_Settings");
+            if (settingsType == null) return 0;
+
+            var instanceProp = settingsType.GetProperty("instance", BindingFlags.Static | BindingFlags.Public);
+            var instance = instanceProp?.GetValue(null) as UnityEngine.Object;
+            if (instance == null) return 0;
+
+            var listField = settingsType.GetField("m_fallbackFontAssets", BindingFlags.NonPublic | BindingFlags.Instance);
+            var list = listField?.GetValue(instance) as System.Collections.IList;
+            if (list == null) return 0;
+
+            foreach (var existing in list)
+            {
+                if (ReferenceEquals(existing, sdfFontAsset)) return 0;
+            }
+            list.Add(sdfFontAsset);
+            EditorUtility.SetDirty(instance);
+            AssetDatabase.SaveAssetIfDirty(instance);
+            return 1;
+        }
+
+        private static int AddFallbackToImportedSdfs(UnityEngine.Object sdfFontAsset)
+        {
+            var settings = LoadOrCreateSettingsAsset();
+            var importRoot = settings != null ? GetStringField(settings, "ImportRoot") ?? "Assets/Figma" : "Assets/Figma";
+            var fontsFolder = settings != null ? GetStringField(settings, "FontsFolderName") ?? "Fonts" : "Fonts";
+            var sdfPaths = ListAssets($"{importRoot}/{fontsFolder}", "*.asset");
+            int added = 0;
+            var fontAssetType = FindType("TMPro.TMP_FontAsset");
+            if (fontAssetType == null) return 0;
+            foreach (var path in sdfPaths)
+            {
+                var asset = AssetDatabase.LoadAssetAtPath(path, fontAssetType);
+                if (asset == null) continue;
+                if (ReferenceEquals(asset, sdfFontAsset)) continue;
+
+                var fallbackField = fontAssetType.GetField("m_FallbackFontAssetTable", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (fallbackField == null) continue;
+                var fallbackList = fallbackField.GetValue(asset) as System.Collections.IList;
+                if (fallbackList == null) continue;
+
+                bool already = false;
+                foreach (var existing in fallbackList)
+                {
+                    if (ReferenceEquals(existing, sdfFontAsset)) { already = true; break; }
+                }
+                if (already) continue;
+                fallbackList.Add(sdfFontAsset);
+                EditorUtility.SetDirty(asset);
+                added++;
+            }
+            if (added > 0) AssetDatabase.SaveAssets();
+            return added;
+        }
+
         private static string ResolveTargetScreenPath(List<string> prefabs, string requestedName)
         {
             string targetPath = null;
@@ -954,6 +1361,31 @@ namespace UguiFromScreenshot.Editor
             return null;
         }
 
+        // ContextFile 의 string 배열 (또는 단일 string) 을 List<string> 으로 정규화한다.
+        // - "selectedPages": ["Page 1", "Page 3"]   → ["Page 1", "Page 3"]
+        // - "selectedPages": "Page 1"               → ["Page 1"] (편의)
+        // - 누락/null/빈 배열                        → null
+        private static List<string> ContextStringList(string key)
+        {
+            if (s_Context == null) return null;
+            if (!s_Context.TryGetValue(key, out var v) || v == null) return null;
+            if (v is string s)
+            {
+                if (string.IsNullOrWhiteSpace(s)) return null;
+                return new List<string> { s };
+            }
+            if (v is List<object> list)
+            {
+                var result = new List<string>();
+                foreach (var item in list)
+                {
+                    if (item is string str && !string.IsNullOrWhiteSpace(str)) result.Add(str);
+                }
+                return result.Count == 0 ? null : result;
+            }
+            return null;
+        }
+
         private static double? ContextDouble(string key)
         {
             if (s_Context == null) return null;
@@ -1061,8 +1493,15 @@ namespace UguiFromScreenshot.Editor
             // BuildPrototypeFlow 강제 false (다이얼로그 회피). context/env 로 명시적으로 켤 수 있음.
             SetField(settings, "BuildPrototypeFlow", ResolveBuildPrototypeFlow());
 
-            // 페이지 선택 모드는 자동화에서는 일단 끔.
-            SetField(settings, "OnlyImportSelectedPages", false);
+            // 페이지 선택 모드: ContextFile.selectedPages 가 있으면 보존, 없으면 끈다.
+            // (PreparePageSelection 메뉴가 선행되어 PageDataList 와 OnlyImportSelectedPages 를 미리 설정한 상태.
+            //  여기서 false 로 덮어버리면 직전 PageSelection 결과가 무효화된다.)
+            var selectedPages = ContextStringList("selectedPages");
+            if (selectedPages == null || selectedPages.Count == 0)
+            {
+                SetField(settings, "OnlyImportSelectedPages", false);
+            }
+            // selectedPages 가 있으면 OnlyImportSelectedPages 와 PageDataList 는 그대로 유지.
 
             EditorUtility.SetDirty(settings);
             AssetDatabase.SaveAssetIfDirty(settings);
@@ -1389,14 +1828,20 @@ namespace UguiFromScreenshot.Editor
             }
             if (c == '[')
             {
-                int depth = 0;
+                // 배열은 List<object> 로 채워준다 (selectedPages, koreanFontFallbackTargets 등 string 배열 지원).
+                i++;
+                var list = new List<object>();
                 while (i < s.Length)
                 {
-                    if (s[i] == '[') depth++;
-                    else if (s[i] == ']') { depth--; if (depth == 0) { i++; break; } }
-                    i++;
+                    SkipWs(s, ref i);
+                    if (i < s.Length && s[i] == ']') { i++; break; }
+                    var element = ReadValue(s, ref i);
+                    list.Add(element);
+                    SkipWs(s, ref i);
+                    if (i < s.Length && s[i] == ',') { i++; continue; }
+                    if (i < s.Length && s[i] == ']') { i++; break; }
                 }
-                return null;
+                return list;
             }
             i++;
             return null;

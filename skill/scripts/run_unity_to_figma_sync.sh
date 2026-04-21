@@ -92,12 +92,38 @@ case "$KEEP_CTX" in true|TRUE|1) KEEP_CTX_JSON=true ;; *) KEEP_CTX_JSON=false ;;
 
 REPORT_REL="${UGUI_FIGMA_REPORT_PATH:-Assets/_Temp/UnityToFigmaReport.json}"
 TIMEOUT_S="${UGUI_FIGMA_SYNC_TIMEOUT_S:-600}"
+DEFAULT_SCREEN="${UGUI_FIGMA_DEFAULT_SCREEN:-}"
+KOREAN_FONT_PATH="${UGUI_FIGMA_KOREAN_FONT_PATH:-}"
+# UGUI_FIGMA_SELECTED_PAGES="Page 3 - Settings Test|Lobby" 처럼 '|' 구분.
+# 비워두면 모든 페이지 임포트 (기존 동작).
+SELECTED_PAGES_RAW="${UGUI_FIGMA_SELECTED_PAGES:-}"
 
 # JSON 안전 escape (단순 케이스만 — URL/PAT 에는 backslash 없음을 가정)
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 URL_E="$(json_escape "$FIGMA_DOCUMENT_URL")"
 PAT_E="$(json_escape "$FIGMA_PAT")"
 RPT_E="$(json_escape "$REPORT_REL")"
+
+# selectedPages 배열 직렬화
+SELECTED_PAGES_JSON=""
+if [ -n "$SELECTED_PAGES_RAW" ]; then
+  IFS='|' read -ra _SP_ARR <<< "$SELECTED_PAGES_RAW"
+  SELECTED_PAGES_JSON='['
+  for i in "${!_SP_ARR[@]}"; do
+    [ "$i" -gt 0 ] && SELECTED_PAGES_JSON+=','
+    SELECTED_PAGES_JSON+="\"$(json_escape "${_SP_ARR[$i]}")\""
+  done
+  SELECTED_PAGES_JSON+=']'
+fi
+
+# 옵션 키들 동적 추가
+EXTRA_KEYS=""
+[ -n "$DEFAULT_SCREEN" ] && EXTRA_KEYS+=",
+  \"defaultScreenName\": \"$(json_escape "$DEFAULT_SCREEN")\""
+[ -n "$KOREAN_FONT_PATH" ] && EXTRA_KEYS+=",
+  \"koreanFontPath\": \"$(json_escape "$KOREAN_FONT_PATH")\""
+[ -n "$SELECTED_PAGES_JSON" ] && EXTRA_KEYS+=",
+  \"selectedPages\": $SELECTED_PAGES_JSON"
 
 cat > "$CONTEXT_FILE" <<EOF
 {
@@ -106,7 +132,7 @@ cat > "$CONTEXT_FILE" <<EOF
   "buildPrototypeFlow": $BUILD_PROTO_JSON,
   "reportPath": "$RPT_E",
   "syncTimeoutSeconds": $TIMEOUT_S,
-  "keepContext": $KEEP_CTX_JSON
+  "keepContext": $KEEP_CTX_JSON$EXTRA_KEYS
 }
 EOF
 chmod 600 "$CONTEXT_FILE"
@@ -114,6 +140,46 @@ log "context 파일 작성: $CONTEXT_FILE"
 
 # 4) Console clear (실패해도 무시)
 unity-cli --timeout-ms=15000 console clear >/dev/null 2>&1 || true
+
+# 4.5) ContextFile 에 selectedPages 가 있으면 PageSelection 준비 단계 먼저 (다이얼로그 회피)
+if grep -q '"selectedPages"' "$CONTEXT_FILE" 2>/dev/null; then
+  log "selectedPages 감지 → PreparePageSelection 호출 (페이지 다운로드 + 매칭)"
+  unity-cli --timeout-ms=30000 menu execute path="Tools/UnityToFigma Bootstrap/Prepare Page Selection" >/dev/null \
+    || log "WARN: PreparePageSelection 메뉴 실행 실패. selectedPages 무시하고 계속."
+
+  # PageSelection 적용 완료 polling (최대 90s)
+  PS_WAIT=0; PS_DONE=""
+  while [ "$PS_WAIT" -lt 90 ]; do
+    sleep 3
+    PS_WAIT=$((PS_WAIT + 3))
+    PS_LOGS="$(unity-cli --json --timeout-ms=15000 console get 2>/dev/null \
+      | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('result', {}).get('logs', []):
+        msg = m.get('message') or ''
+        print(msg.replace('\n',' ').strip())
+except Exception: pass
+" 2>/dev/null || true)"
+    if printf '%s\n' "$PS_LOGS" | grep -q "PageSelection 적용 완료"; then
+      PS_DONE=$(printf '%s\n' "$PS_LOGS" | grep "PageSelection 적용 완료" | tail -n1)
+      log "$PS_DONE"
+      break
+    fi
+    if printf '%s\n' "$PS_LOGS" | grep -qE "PageSelection 매칭된 페이지가 없습니다|PageSelection 다운로드 60s|PageSelection 다운로드 호출 실패"; then
+      log "PageSelection 실패. 계속 진행하지 않고 종료."
+      printf '%s\n' "$PS_LOGS" | tail -n 10 >&2
+      exit 3
+    fi
+  done
+  if [ -z "$PS_DONE" ]; then
+    log "WARN: PageSelection 적용 완료 로그를 90s 안에 못 받음. 그래도 Sync 시도."
+  fi
+
+  # Console clear (PageSelection 로그가 Sync polling 을 오염하지 않도록)
+  unity-cli --timeout-ms=15000 console clear >/dev/null 2>&1 || true
+fi
 
 # 5) Sync Document 메뉴 실행 (UnityToFigmaImporter.SyncAsync 는 async void 라 즉시 return)
 log "Sync 실행: $FIGMA_DOCUMENT_URL"

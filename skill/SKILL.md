@@ -13,6 +13,7 @@ UI 디자인을 Unity UGUI 로 옮기는 스킬. **Figma URL 입력 시에는 [U
 
 1. **자동 임포트 우선, 보정 최소화**. UnityToFigma 가 처리한 RectTransform/앵커/색상은 가급적 건드리지 않는다. 비율을 망치는 가장 흔한 원인이다.
 2. **라운드 코너는 추가 보정/대체를 하지 않는다**. Path A (UnityToFigma) 에서는 `FigmaImage.cornerRadius` 가 SDF 로 정확히 처리되므로 그대로 둔다. Path B (스크린샷) 에서는 라운드를 사용자에게 위임한다. **어떤 경우에도 sprite/mask 로 라운드를 흉내내지 말 것.** 자세한 규칙: `references/round-corner-policy.md`
+2-1. **`FigmaImage` 컴포넌트는 표준 `UI.Image` 로 변환하지 않는다**. UnityToFigma 가 라운드 / 스트로크 / 그라디언트 / 멀티 채널 컬러를 SDF 로 한 번에 처리하는 전용 컴포넌트다. `Image` 로 갈아끼우면 라운드/스트로크가 즉시 깨진다. 일반적인 UGUI 워크플로우와 달라 보여도 그대로 둔다. 진짜로 `Image` 가 필요한 케이스 (마스크, 9-slice 등) 는 사용자가 명시 요청 시에만 변경하고, 라운드 정보가 손실됨을 안내한다.
 3. **에이전트는 차이만 처리**. 자동 임포트가 만든 결과 vs 레퍼런스 스크린샷을 비교해서 실제로 빠진/잘못된 항목만 수정한다. 전체를 다시 만들지 않는다.
 4. **다이얼로그가 뜨는 작업은 자동화하지 말 것**. 다이얼로그를 띄우는 환경(설정 누락, PAT 미입력, TMP Essentials 미설치 등)은 사전 부트스트랩으로 박아두거나 사용자에게 한 번 요청한다.
 5. **Sync 전 Figma 1차 정리 필수**. 페이지에 화면 루트 Frame 이 없거나 한국어/자동생성 레이어명이 섞여 있으면, 에이전트가 `use_figma` 로 먼저 정리한 뒤에 sync 한다. 자세한 정책: `references/figma-prep-policy.md`
@@ -303,8 +304,10 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 3. **다른 Screen prefab 인스턴스 정리** (`cleanOtherScreens=true` 기본): 씬 루트 + 모든 Canvas 자식에서 동일 폴더 내 다른 Screen prefab 이름과 매칭되는 GameObject 제거
 4. **Canvas 청소** (`clearCanvasOnInstantiate=true` 기본): 대상 Canvas 의 모든 자식을 비움. unpack 된 prefab 잔재처럼 이름으로 추적 불가능한 객체까지 깨끗이 정리하여 한 화면만 보이게 한다
 5. 없으면 `UICanvas` 새로 생성 (ScreenSpaceOverlay)
-6. **CanvasScaler 자동 설정**: `ScaleWithScreenSize`, `referenceResolution = prefab.RectTransform.sizeDelta` (예: 1440x3040), `screenMatchMode = Expand`. 즉 **화면 디자인의 사이즈가 곧 기준 해상도**가 된다
-7. `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 로 인스턴스화 + RectTransform 풀스트레치(anchorMin=0, anchorMax=1, offset=0)
+6. **CanvasScaler 화면 대응 정책 (검증됨, 2026-04-21)**: `ScaleWithScreenSize`, `referenceResolution = prefab.RectTransform.sizeDelta` (예: 1080x1920), `screenMatchMode = MatchWidthOrHeight`, `match` 는 디자인 종횡비로 자동 결정 — **portrait (W < H) → 0 (Width 우선)**, **landscape (W ≥ H) → 1 (Height 우선)**. 즉 **화면 디자인 사이즈가 곧 기준 해상도** + 디자인 종횡비에 맞는 매칭축 자동 선택.
+7. `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 로 인스턴스화 + **Screen root 의 RectTransform 을 center-anchor + sizeDelta=디자인 사이즈 로 고정** (검증됨, 2026-04-21).
+   - **이전 정책 (stretch + sizeDelta=0) 의 문제**: UnityToFigma 자식들이 픽셀 단위 절대 좌표라 root 가 Canvas 폭으로 stretch 되면 자식들이 좌상단에 몰린다 (사용자 보고: "한쪽에 붙어버림"). 이번 변경으로 해소.
+   - **새 정책**: root 가 항상 디자인 사이즈를 유지하고 화면 가운데에 정렬됨. CanvasScaler 가 화면 비율 차이를 흡수.
 8. (best-effort) GameView 종횡비를 디자인 사이즈에 맞춰 자동 변경 (Unity 6.x 일부 버전에서 reflection 실패 가능 — 실패해도 다른 동작에 영향 없음)
 
 **옵션 (ContextFile 또는 EditorPrefs 로 제어)**:
@@ -314,6 +317,8 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 | `cleanOtherScreens` | `true` | 씬에서 다른 Screen prefab 인스턴스 자동 제거 |
 | `clearCanvasOnInstantiate` | `true` | 대상 Canvas 의 모든 자식 비움 (가장 강력한 청소) |
 | `syncGameViewAspect` | `true` | GameView 종횡비를 prefab 사이즈에 맞춰 자동 변경 (실패 시 경고만) |
+| `canvasMatchMode` | `"auto"` | CanvasScaler.ScreenMatchMode 강제. `"auto"` (포트레이트=Width, 랜드스케이프=Height), `"width"`, `"height"`, `"expand"`, `"shrink"` |
+| `screenRootStretch` | `false` | `true` 면 root 를 풀스트레치(0,0~1,1). UnityToFigma 디자인은 절대 좌표라 false 권장 — true 시 자식 좌상단 쏠림 발생 |
 
 여러 화면을 띄워야 하는 시나리오:
 - **권장**: 화면별로 별도 Canvas 사용 (Unity 의 ScreenSpaceOverlay Canvas 는 여러 개 동시 사용 가능, sortingOrder 로 정렬). 각 Canvas 의 referenceResolution 을 해당 화면 prefab 사이즈에 맞춤.
@@ -325,6 +330,33 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 - → 반드시 부트스트랩 메뉴(`Tools/UnityToFigma Bootstrap/Instantiate Default Screen`) 를 사용한다. C# 측에서 `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 으로 안전하게 처리한다.
 
 > **참고**: 기본 Canvas 이름은 `Canvas` 가 아니라 `UICanvas` 가 자동 생성된다 (UnityToFigma + 부트스트랩 동작).
+
+#### Step 1A.5a: 다해상도 검증 + 사후 보정 (Apply Responsive Layout)
+
+**중요한 검증 절차** (검증됨, 2026-04-21): 인스턴스화 직후 GameView 종횡비를 *디자인과 다른 비율* 로 두고 캡처해서 한쪽 쏠림 / 잘림 / 빈 영역이 없는지 확인한다. 흔한 문제 패턴:
+
+| 증상 | 원인 | 처리 |
+|------|------|------|
+| 디자인이 좌측에 1080 폭으로 붙고 우측 840 영역이 비어 있음 (가로 GameView) | 이전 정책 (root stretch + sizeDelta=0). 자식들이 절대 좌표라 좌상단 쏠림 | 새 정책 (center-anchor) 으로 자동 해소. 이미 인스턴스화된 화면은 `Apply Responsive Layout` 메뉴 호출 |
+| 위/아래 일부 잘림 (portrait 디자인 + landscape GameView) | match=Width 자동 선택 → 가로폭은 맞지만 디자인 세로가 화면 밖으로 늘어남 | 정책상 정상 trade-off. 디자인 자체가 portrait 인 이상 본질적 한계. `canvasMatchMode="height"` 로 override 시 좌우 빈 영역으로 바뀜 (선호에 따라 선택) |
+| 좌/우 빈 영역 (portrait 디자인 + landscape GameView, height 매칭) | match=Height 강제로 세로폭은 맞지만 가로가 좁음 | 정책상 정상 |
+| 자식 위치가 모두 (0,0) 부근에 몰려있음 | UnityToFigma anchor 기본값(좌상단 0,1)인데 root 가 stretch | `Apply Responsive Layout` 으로 root center-anchor 복구 |
+
+이미 인스턴스화된 화면을 다시 만들지 않고 부분 보정만 하고 싶을 때:
+
+```bash
+unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Apply Responsive Layout"
+```
+
+이 메뉴는 다음을 수행한다 (검증됨, 2026-04-21):
+
+1. `defaultScreenName` (suffix 폴백 포함) 또는 씬에서 `GameObject.Find` 로 대상 Screen 결정
+2. **Screen root 의 RectTransform 정상화**: 기본은 center-anchor (0.5, 0.5) + sizeDelta = 디자인 사이즈. `screenRootStretch=true` 옵션 시 풀스트레치
+3. **CanvasScaler 정상화**: `referenceResolution = 디자인 W x H`, `screenMatchMode` = `canvasMatchMode` 옵션 (기본 auto)
+4. **LayoutElement 검수 리포트** (수정 안 함): `LayoutElement` 가 있는데 부모에 `LayoutGroup` 이 없는 자식 개수를 콘솔에 출력. UnityToFigma 가 모든 노드에 `LayoutElement` 를 붙이지만 실제 레이아웃은 절대 좌표 RectTransform 으로 결정되므로 이 컴포넌트는 사실상 무용지물. 디스크 / inspector 노이즈가 신경 쓰이면 사용자 또는 에이전트가 수동 정리.
+5. (옵션) GameView 종횡비도 디자인 사이즈로 재동기화 (`syncGameViewAspect=true` 기본)
+
+**LayoutElement-only 정리 정책 (사용자 위임)**: 본 스킬은 LayoutElement 를 자동 제거하지 않는다 — UnityToFigma 가 향후 LayoutGroup 으로 묶을 가능성을 남겨두기 위해서. 사용자가 명시적으로 정리 원하면 검수 리포트 ("LayoutElement 가 있지만 부모에 LayoutGroup 이 없는 자식 N/M 개") 를 보고 수동 결정.
 
 #### Step 1A.5b: 디자인 사이즈 그대로 캡처 (검증용)
 

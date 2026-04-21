@@ -686,30 +686,63 @@ namespace UguiFromScreenshot.Editor
                 parent = canvas.transform;
             }
 
-            // CanvasScaler 를 Screen prefab 사이즈에 맞춤
+            // CanvasScaler 를 Screen prefab 사이즈에 맞춤.
+            //
+            // 화면 대응 정책 (검증됨, 2026-04-21):
+            //   - uiScaleMode = ScaleWithScreenSize : 화면 사이즈에 비례 스케일
+            //   - referenceResolution = 디자인 W x H (예: 1080x1920)
+            //   - screenMatchMode = MatchWidthOrHeight 로 강제. ContextFile.canvasMatchMode = 'expand' / 'shrink' / 'width' / 'height' / 'auto'(기본) 로 override 가능
+            //   - matchWidthOrHeight :
+            //       portrait 디자인 (W < H) → 0 (Width 기준; 가로폭 맞추고 위/아래 안전영역 사용)
+            //       landscape 디자인 (W >= H) → 1 (Height 기준; 세로 맞추고 좌/우 안전영역 사용)
+            //     이렇게 하면 디자인 비율이 다른 화면에서도 한쪽에 붙는 현상이 사라지고
+            //     자연스럽게 중앙 기준으로 비율 유지된다.
             var scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
             if (scaler == null) scaler = canvas.gameObject.AddComponent<UnityEngine.UI.CanvasScaler>();
             scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = referenceResolution;
-            scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Expand;
+            ApplyScreenMatchMode(scaler, referenceResolution);
 
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
-            // Screen 을 Canvas 안에 풀스트레치로 정합 (Figma 좌표 그대로 보이게)
+
+            // Screen root 의 RectTransform 화면 대응 정책 (검증됨, 2026-04-21):
+            //   - **stretch 로 두면 절대 좌표 자식들이 Canvas 폭/높이로 늘어난 root 안에서 좌상단에 몰린다.**
+            //     UnityToFigma 가 만든 자식들은 모두 Figma 픽셀 단위 anchoredPosition + sizeDelta 라
+            //     root 가 stretch 되면 width = Canvas.width 가 되어 '한쪽에 붙어 보임' 현상 발생.
+            //   - 따라서 root 는 항상 **center-anchor + 디자인 사이즈 고정** 으로 둔다.
+            //     CanvasScaler 가 referenceResolution 기준으로 root 를 스케일하므로
+            //     화면 비율이 다르더라도 root 는 화면 가운데에 디자인 비율로 표시된다.
+            //   - 사용자가 명시적으로 stretch 를 원하면 ContextFile.screenRootStretch=true 로 override 가능.
             var rt = instance.transform as RectTransform;
             if (rt != null)
             {
-                rt.anchorMin = Vector2.zero;
-                rt.anchorMax = Vector2.one;
-                rt.pivot = new Vector2(0.5f, 0.5f);
-                rt.anchoredPosition = Vector2.zero;
-                rt.offsetMin = Vector2.zero;
-                rt.offsetMax = Vector2.zero;
-                rt.localScale = Vector3.one;
+                var stretchOverride = ContextBool("screenRootStretch") ?? false;
+                if (stretchOverride)
+                {
+                    rt.anchorMin = Vector2.zero;
+                    rt.anchorMax = Vector2.one;
+                    rt.pivot = new Vector2(0.5f, 0.5f);
+                    rt.anchoredPosition = Vector2.zero;
+                    rt.offsetMin = Vector2.zero;
+                    rt.offsetMax = Vector2.zero;
+                    rt.localScale = Vector3.one;
+                    Debug.Log("[UnityToFigmaBootstrap] screenRootStretch=true → root 풀스트레치 (자식 절대좌표 좌상단 정렬됨)");
+                }
+                else
+                {
+                    rt.anchorMin = new Vector2(0.5f, 0.5f);
+                    rt.anchorMax = new Vector2(0.5f, 0.5f);
+                    rt.pivot = new Vector2(0.5f, 0.5f);
+                    rt.anchoredPosition = Vector2.zero;
+                    rt.sizeDelta = referenceResolution;
+                    rt.localScale = Vector3.one;
+                }
             }
             Selection.activeGameObject = instance;
             EditorSceneRefresh();
             Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {targetPath} " +
-                      $"(parent={parent.name}, referenceResolution={referenceResolution.x}x{referenceResolution.y})");
+                      $"(parent={parent.name}, referenceResolution={referenceResolution.x}x{referenceResolution.y}, " +
+                      $"matchMode={scaler.screenMatchMode}, match={scaler.matchWidthOrHeight:F2})");
 
             // GameView 종횡비도 자동으로 디자인에 맞춘다 (cleanOtherScreens 와 동일하게 기본 활성)
             var syncAspect = ContextBool("syncGameViewAspect") ?? true;
@@ -718,6 +751,175 @@ namespace UguiFromScreenshot.Editor
                 int width = Mathf.RoundToInt(prefabRT.rect.width);
                 int height = Mathf.RoundToInt(prefabRT.rect.height);
                 ApplyGameViewAspect(width, height, prefab.name);
+            }
+        }
+
+        // CanvasScaler 의 ScreenMatchMode 와 matchWidthOrHeight 를 정책에 따라 적용.
+        // ContextFile.canvasMatchMode 옵션:
+        //   - "auto"   (기본) : portrait → match=0(Width), landscape → match=1(Height)
+        //   - "width"          : MatchWidthOrHeight + match=0 (가로폭 우선)
+        //   - "height"         : MatchWidthOrHeight + match=1 (세로 우선)
+        //   - "expand"         : Expand (디자인 비율 유지하며 화면 안에 들어가도록 축소; 빈 영역 발생 가능)
+        //   - "shrink"         : Shrink (화면을 채우면서 일부 잘림)
+        // 기본 'auto' 는 사용자 스크린샷에서 가장 자연스러운 결과를 준다 (디자인 비율 유지 + 한쪽 쏠림 없음).
+        private static void ApplyScreenMatchMode(UnityEngine.UI.CanvasScaler scaler, Vector2 referenceResolution)
+        {
+            var mode = (ContextString("canvasMatchMode") ?? "auto").ToLowerInvariant();
+            switch (mode)
+            {
+                case "expand":
+                    scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Expand;
+                    break;
+                case "shrink":
+                    scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Shrink;
+                    break;
+                case "width":
+                    scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                    scaler.matchWidthOrHeight = 0f;
+                    break;
+                case "height":
+                    scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                    scaler.matchWidthOrHeight = 1f;
+                    break;
+                case "auto":
+                default:
+                    scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+                    // portrait (W < H) → 가로폭 기준; landscape (W >= H) → 세로 기준
+                    scaler.matchWidthOrHeight = referenceResolution.x < referenceResolution.y ? 0f : 1f;
+                    break;
+            }
+        }
+
+        // 이미 씬에 인스턴스화된 Screen 을 사후 보정한다.
+        // - root RT 를 center-anchor + sizeDelta=디자인 으로 정상화 (좌상단 쏠림 해소)
+        // - CanvasScaler match mode 재적용
+        // - GameView aspect 동기화 옵션
+        // - 자식 RT 의 LayoutElement-only 의존도 리포트 (수정은 하지 않음, 검수용)
+        // 인스턴스화 메뉴를 다시 호출하지 않고 부분 보정만 하고 싶을 때 사용.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Apply Responsive Layout", priority = 25)]
+        public static void ApplyResponsiveLayoutMenu()
+        {
+            LoadContextFileIfPresent();
+
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null) { Debug.LogError("[UnityToFigmaBootstrap] settings 없음"); return; }
+            var importRoot = GetStringField(settings, "ImportRoot") ?? "Assets/Figma";
+            var screensFolder = GetStringField(settings, "ScreensFolderName") ?? "Screens";
+            var prefabs = ListAssets($"{importRoot}/{screensFolder}", "*.prefab");
+
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
+            string targetName = null;
+            if (prefabs.Count > 0)
+            {
+                var p = ResolveTargetScreenPath(prefabs, requestedName);
+                targetName = Path.GetFileNameWithoutExtension(p);
+            }
+            else if (!string.IsNullOrEmpty(requestedName))
+            {
+                targetName = requestedName;
+            }
+            if (string.IsNullOrEmpty(targetName))
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] 보정 대상 Screen 이름을 결정하지 못했습니다.");
+                return;
+            }
+
+            var instance = GameObject.Find(targetName);
+            if (instance == null)
+            {
+                Debug.LogError($"[UnityToFigmaBootstrap] 씬에 '{targetName}' 인스턴스가 없습니다. 먼저 'Instantiate Default Screen' 호출.");
+                return;
+            }
+            var rt = instance.transform as RectTransform;
+            if (rt == null)
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] '{targetName}' RectTransform 없음");
+                return;
+            }
+
+            // 디자인 사이즈 = prefab 의 sizeDelta (인스턴스의 sizeDelta 가 stretch 로 0,0 이 되었을 가능성 대비)
+            Vector2 designSize = rt.sizeDelta;
+            var prefabSource = PrefabUtility.GetCorrespondingObjectFromSource(instance) as GameObject;
+            if (prefabSource != null)
+            {
+                var prefabRT = prefabSource.GetComponent<RectTransform>();
+                if (prefabRT != null && prefabRT.rect.width > 1f && prefabRT.rect.height > 1f)
+                {
+                    designSize = new Vector2(prefabRT.rect.width, prefabRT.rect.height);
+                }
+            }
+            if (designSize.x < 1f || designSize.y < 1f)
+            {
+                Debug.LogWarning("[UnityToFigmaBootstrap] designSize 추정 실패 → 1080x1920 기본값.");
+                designSize = new Vector2(1080f, 1920f);
+            }
+
+            // root RT 정상화
+            var stretchOverride = ContextBool("screenRootStretch") ?? false;
+            if (stretchOverride)
+            {
+                rt.anchorMin = Vector2.zero;
+                rt.anchorMax = Vector2.one;
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = Vector2.zero;
+                rt.offsetMin = Vector2.zero;
+                rt.offsetMax = Vector2.zero;
+            }
+            else
+            {
+                rt.anchorMin = new Vector2(0.5f, 0.5f);
+                rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.anchoredPosition = Vector2.zero;
+                rt.sizeDelta = designSize;
+            }
+            rt.localScale = Vector3.one;
+
+            // Canvas 정상화
+            var canvas = instance.GetComponentInParent<Canvas>();
+            if (canvas != null)
+            {
+                var scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
+                if (scaler == null) scaler = canvas.gameObject.AddComponent<UnityEngine.UI.CanvasScaler>();
+                scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = designSize;
+                ApplyScreenMatchMode(scaler, designSize);
+                EditorUtility.SetDirty(canvas.gameObject);
+                Debug.Log($"[UnityToFigmaBootstrap] Canvas 정상화: ref={designSize.x}x{designSize.y}, " +
+                          $"matchMode={scaler.screenMatchMode}, match={scaler.matchWidthOrHeight:F2}");
+            }
+
+            // LayoutElement-only 자식 검수 (수정은 안 함)
+            int layoutOnlyCount = 0;
+            int total = 0;
+            foreach (var t in instance.GetComponentsInChildren<RectTransform>(true))
+            {
+                if (t == rt) continue;
+                total++;
+                var le = t.GetComponent<UnityEngine.UI.LayoutElement>();
+                var hasLayoutGroup = t.GetComponentInParent<UnityEngine.UI.HorizontalOrVerticalLayoutGroup>() != null
+                                  || t.GetComponentInParent<UnityEngine.UI.GridLayoutGroup>() != null;
+                if (le != null && !hasLayoutGroup) layoutOnlyCount++;
+            }
+            if (layoutOnlyCount > 0)
+            {
+                Debug.LogWarning($"[UnityToFigmaBootstrap] LayoutElement 가 있지만 부모에 LayoutGroup 이 없는 자식 {layoutOnlyCount}/{total} 개. " +
+                                 "디자인 의도가 absolute pixel 이라면 LayoutElement 는 제거 가능 (RectTransform anchor/position 으로 충분).");
+            }
+            else if (total > 0)
+            {
+                Debug.Log($"[UnityToFigmaBootstrap] 자식 {total} 개 모두 LayoutGroup 컨텍스트 또는 absolute. 별도 보정 불필요.");
+            }
+
+            EditorSceneRefresh();
+            Debug.Log($"[UnityToFigmaBootstrap] Apply Responsive Layout 완료 (target={targetName}, design={designSize.x}x{designSize.y})");
+
+            var syncAspect = ContextBool("syncGameViewAspect") ?? true;
+            if (syncAspect)
+            {
+                ApplyGameViewAspect(Mathf.RoundToInt(designSize.x), Mathf.RoundToInt(designSize.y), targetName);
             }
         }
 

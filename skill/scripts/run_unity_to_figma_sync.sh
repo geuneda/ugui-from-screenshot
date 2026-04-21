@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 # UnityToFigma 일괄 임포트 실행 헬퍼
+#
 # - PROJECT_PATH 의 Editor 폴더에 UnityToFigmaBootstrap.cs 가 없으면 복사
-# - FIGMA_DOCUMENT_URL / FIGMA_PAT 을 EditorPrefs 또는 환경변수로 전달
-# - Tools/UnityToFigma Bootstrap/Sync Document 메뉴 실행
-# - 결과 리포트 JSON (Assets/_Temp/UnityToFigmaReport.json) 을 dump 하고 stdout 에 출력
+# - {PROJECT}/Library/UguiFigmaContext.json 에 URL/PAT/옵션 기록
+#   (unity-cli 는 셸 env 를 Unity 프로세스로 전달하지 않으므로 파일 기반 컨텍스트 필수)
+# - "Tools/UnityToFigma Bootstrap/Sync Document" 메뉴 실행
+# - Console "UnityToFigma import: created=..." 한 줄 요약을 polling
+# - 결과 리포트 JSON (Assets/_Temp/UnityToFigmaReport.json) 을 출력
 #
 # 사용법:
 #   FIGMA_DOCUMENT_URL=... FIGMA_PAT=... PROJECT_PATH=/path/to/UnityProject \
 #     scripts/run_unity_to_figma_sync.sh
 #
-#   (선택) UGUI_FIGMA_BUILD_PROTOTYPE_FLOW=true  PrototypeFlow 빌드 활성화
+# 옵션 환경변수:
+#   UGUI_FIGMA_BUILD_PROTOTYPE_FLOW=true    PrototypeFlow 빌드 활성화 (기본 false)
+#   UGUI_FIGMA_REPORT_PATH=Assets/...       리포트 출력 경로
+#   UGUI_FIGMA_SYNC_TIMEOUT_S=600           Sync 완료 대기 타임아웃 (초)
+#   UGUI_FIGMA_KEEP_CONTEXT=true            완료 후 context 파일 유지 (디버깅용; 기본 삭제)
 #
 # 사전 조건:
 #   - unity-cli + Unity bridge 가 동작 중
-#   - UnityToFigma 패키지가 설치되어 있음 (없으면 ensure_unity_to_figma_package.sh 실행)
-#   - TextMeshPro Essential Resources 가 임포트되어 있음
+#   - UnityToFigma 패키지 (com.simonoliver.unitytofigma) 가 설치되어 있음
+#   - Unity Editor 가 Edit Mode (Play Mode 아님)
 
 set -u
 set -o pipefail
@@ -33,72 +40,141 @@ FIGMA_PAT="${FIGMA_PAT:-}"
 [ -n "$FIGMA_DOCUMENT_URL" ] || fail "FIGMA_DOCUMENT_URL 환경변수가 필요합니다."
 [ -n "$FIGMA_PAT" ] || fail "FIGMA_PAT 환경변수가 필요합니다."
 
-# 1) Bootstrap.cs 복사 보장
+# 1) Bridge 헬스체크 (한 번 빠르게)
+unity-cli --timeout-ms=10000 status >/dev/null 2>&1 \
+  || fail "Unity bridge 응답 없음. Editor 가 켜져 있는지 확인."
+
+# 2) Bootstrap.cs 복사 보장
 SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOOTSTRAP_SRC="$SKILL_ROOT/assets/UnityToFigmaBootstrap.cs"
 [ -f "$BOOTSTRAP_SRC" ] || fail "스킬에 UnityToFigmaBootstrap.cs 가 없습니다: $BOOTSTRAP_SRC"
 
-EDITOR_DIR="$PROJECT_PATH/Assets/_Project/Scripts/Editor"
-BOOTSTRAP_DST="$EDITOR_DIR/UnityToFigmaBootstrap.cs"
+# Editor 폴더 결정: Assets/Editor 우선, 없으면 Assets/_Project/Scripts/Editor 생성
+if [ -d "$PROJECT_PATH/Assets/Editor" ]; then
+  EDITOR_DIR="$PROJECT_PATH/Assets/Editor"
+elif [ -d "$PROJECT_PATH/Assets/_Project/Scripts/Editor" ]; then
+  EDITOR_DIR="$PROJECT_PATH/Assets/_Project/Scripts/Editor"
+else
+  EDITOR_DIR="$PROJECT_PATH/Assets/Editor"
+  mkdir -p "$EDITOR_DIR"
+fi
 
-mkdir -p "$EDITOR_DIR"
+BOOTSTRAP_DST="$EDITOR_DIR/UnityToFigmaBootstrap.cs"
+NEED_REFRESH="no"
 if [ ! -f "$BOOTSTRAP_DST" ] || ! cmp -s "$BOOTSTRAP_SRC" "$BOOTSTRAP_DST"; then
   cp "$BOOTSTRAP_SRC" "$BOOTSTRAP_DST"
   log "Bootstrap 복사: $BOOTSTRAP_DST"
-  unity-cli --timeout-ms=15000 editor refresh >/dev/null 2>&1 || true
-  unity-cli --timeout-ms=300000 editor compile >/dev/null 2>&1 || log "WARN: editor compile 응답 지연"
+  NEED_REFRESH="yes"
 fi
 
-# 2) Bridge 헬스체크
-unity-cli --timeout-ms=10000 status >/dev/null 2>&1 \
-  || fail "Unity bridge 응답 없음. Editor 가 켜져 있는지 확인."
+if [ "$NEED_REFRESH" = "yes" ]; then
+  log "AssetDatabase Refresh + 컴파일 트리거"
+  unity-cli --timeout-ms=15000 menu execute path="Assets/Refresh" >/dev/null 2>&1 || true
+  # 컴파일 안정화 대기 (큰 프로젝트면 더 걸릴 수 있음)
+  sleep 5
+fi
 
-# 3) Sync Document 실행 (env 가 자식 프로세스로 전달되지 않으므로 EditorPrefs 로 한 번 박는 형태도 지원)
-log "Sync 실행: $FIGMA_DOCUMENT_URL"
-export FIGMA_DOCUMENT_URL FIGMA_PAT UGUI_FIGMA_BUILD_PROTOTYPE_FLOW="${UGUI_FIGMA_BUILD_PROTOTYPE_FLOW:-false}"
+# 3) Library/UguiFigmaContext.json 작성
+CONTEXT_FILE="$PROJECT_PATH/Library/UguiFigmaContext.json"
+mkdir -p "$PROJECT_PATH/Library"
 
-# Sync 시작 전 Console 비워두면 polling 이 깔끔하다 (실패해도 무시)
+BUILD_PROTO="${UGUI_FIGMA_BUILD_PROTOTYPE_FLOW:-false}"
+case "$BUILD_PROTO" in true|TRUE|1) BUILD_PROTO_JSON=true ;; *) BUILD_PROTO_JSON=false ;; esac
+
+KEEP_CTX="${UGUI_FIGMA_KEEP_CONTEXT:-false}"
+case "$KEEP_CTX" in true|TRUE|1) KEEP_CTX_JSON=true ;; *) KEEP_CTX_JSON=false ;; esac
+
+REPORT_REL="${UGUI_FIGMA_REPORT_PATH:-Assets/_Temp/UnityToFigmaReport.json}"
+TIMEOUT_S="${UGUI_FIGMA_SYNC_TIMEOUT_S:-600}"
+
+# JSON 안전 escape (단순 케이스만 — URL/PAT 에는 backslash 없음을 가정)
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+URL_E="$(json_escape "$FIGMA_DOCUMENT_URL")"
+PAT_E="$(json_escape "$FIGMA_PAT")"
+RPT_E="$(json_escape "$REPORT_REL")"
+
+cat > "$CONTEXT_FILE" <<EOF
+{
+  "documentUrl": "$URL_E",
+  "pat": "$PAT_E",
+  "buildPrototypeFlow": $BUILD_PROTO_JSON,
+  "reportPath": "$RPT_E",
+  "syncTimeoutSeconds": $TIMEOUT_S,
+  "keepContext": $KEEP_CTX_JSON
+}
+EOF
+chmod 600 "$CONTEXT_FILE"
+log "context 파일 작성: $CONTEXT_FILE"
+
+# 4) Console clear (실패해도 무시)
 unity-cli --timeout-ms=15000 console clear >/dev/null 2>&1 || true
 
-# 메뉴 실행 (UnityToFigmaImporter.SyncAsync 는 async void 라서 즉시 return 됨)
-unity-cli --timeout-ms=60000 menu execute path="Tools/UnityToFigma Bootstrap/Sync Document" \
-  || fail "Sync 메뉴 실행 실패. Console 로그 확인."
+# 5) Sync Document 메뉴 실행 (UnityToFigmaImporter.SyncAsync 는 async void 라 즉시 return)
+log "Sync 실행: $FIGMA_DOCUMENT_URL"
+unity-cli --timeout-ms=60000 menu execute path="Tools/UnityToFigma Bootstrap/Sync Document" >/dev/null \
+  || fail "Sync 메뉴 실행 실패. Console 확인."
 
-# 4) Console 에서 "UnityToFigma import: created=" 한 줄 요약을 polling (최대 SYNC_TIMEOUT_S 초)
-SYNC_TIMEOUT_S="${UGUI_FIGMA_SYNC_TIMEOUT_S:-600}"
+# 6) Console 에서 "UnityToFigma import: created=" 한 줄 요약을 polling
 WAITED=0
 INTERVAL=5
 SUMMARY=""
-log "임포트 완료 대기 중 (최대 ${SYNC_TIMEOUT_S}s, ${INTERVAL}s 간격으로 Console polling)"
-while [ "$WAITED" -lt "$SYNC_TIMEOUT_S" ]; do
+TMP_RETRY_DONE="no"
+log "임포트 완료 대기 중 (최대 ${TIMEOUT_S}s, ${INTERVAL}s 간격으로 Console polling)"
+while [ "$WAITED" -lt "$TIMEOUT_S" ]; do
   sleep "$INTERVAL"
   WAITED=$((WAITED + INTERVAL))
-  LOGS="$(unity-cli --timeout-ms=15000 console get 2>/dev/null || true)"
-  SUMMARY="$(printf '%s\n' "$LOGS" | grep -E '^UnityToFigma import: created=[0-9]+' | tail -n1 || true)"
+  LOGS_JSON="$(unity-cli --json --timeout-ms=15000 console get 2>/dev/null || true)"
+  LINES="$(printf '%s' "$LOGS_JSON" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    for m in d.get('result', {}).get('logs', []):
+        msg = m.get('message') or ''
+        print(msg.replace('\n',' ').strip())
+except Exception:
+    pass
+" 2>/dev/null || true)"
+
+  SUMMARY="$(printf '%s\n' "$LINES" | grep -E '^UnityToFigma import: created=[0-9]+' | tail -n1 || true)"
   if [ -n "$SUMMARY" ]; then
     log "임포트 요약: $SUMMARY"
     break
   fi
-  # 명백한 에러 로그가 있으면 조기 종료
-  if printf '%s\n' "$LOGS" | grep -qE '\[UnityToFigma\] Error|UnityToFigma Error'; then
-    log "Console 에 UnityToFigma 에러 로그 감지. 즉시 종료."
-    printf '%s\n' "$LOGS" | tail -n 30 >&2
+
+  # TMP Essentials 자동 임포트 안내 로그 → 한 번 더 sync 트리거
+  if [ "$TMP_RETRY_DONE" = "no" ] && printf '%s\n' "$LINES" | grep -q "TMP Essential Resources 자동 임포트 호출"; then
+    log "TMP 자동 임포트 감지 → 컴파일 대기 후 Sync 재실행"
+    sleep 10
+    unity-cli --timeout-ms=60000 menu execute path="Tools/UnityToFigma Bootstrap/Sync Document" >/dev/null \
+      || log "WARN: Sync 재실행 실패"
+    TMP_RETRY_DONE="yes"
+    continue
+  fi
+
+  # 부트스트랩 자체 실패 로그
+  if printf '%s\n' "$LINES" | grep -qE '\[UnityToFigmaBootstrap\] Sync 실패|\[UnityToFigmaBootstrap\] PAT|\[UnityToFigmaBootstrap\] Figma document URL'; then
+    log "부트스트랩 에러 감지. 최근 로그 출력 후 종료:"
+    printf '%s\n' "$LINES" | tail -n 30 >&2
+    break
+  fi
+
+  # UnityToFigma 자체 에러
+  if printf '%s\n' "$LINES" | grep -qE 'Error downloading Figma|Error generating Figma'; then
+    log "UnityToFigma 에러 감지. 최근 로그 출력 후 종료:"
+    printf '%s\n' "$LINES" | tail -n 30 >&2
     break
   fi
 done
 
 if [ -z "$SUMMARY" ]; then
-  log "WARN: ${SYNC_TIMEOUT_S}s 안에 임포트 요약을 받지 못했습니다. (대형 문서면 UGUI_FIGMA_SYNC_TIMEOUT_S 를 늘리세요)"
+  log "WARN: ${TIMEOUT_S}s 안에 임포트 요약을 받지 못했습니다."
 fi
 
-# 5) 리포트 dump
-unity-cli --timeout-ms=60000 menu execute path="Tools/UnityToFigma Bootstrap/Dump Last Report" \
-  || log "WARN: 리포트 dump 메뉴 실행 실패"
-
-REPORT_PATH="$PROJECT_PATH/Assets/_Temp/UnityToFigmaReport.json"
+# 7) 리포트 위치 안내 (부트스트랩이 Sync 성공 시 자동 dump)
+REPORT_PATH="$PROJECT_PATH/$REPORT_REL"
 if [ -f "$REPORT_PATH" ]; then
-  log "리포트 위치: $REPORT_PATH"
+  log "리포트: $REPORT_PATH"
   cat "$REPORT_PATH"
 else
-  log "WARN: 리포트 파일이 생성되지 않았습니다: $REPORT_PATH"
+  log "WARN: 리포트 파일 없음 ($REPORT_PATH). Dump Last Report 메뉴를 수동 호출하세요."
 fi

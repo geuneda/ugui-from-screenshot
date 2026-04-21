@@ -96,8 +96,9 @@ fi
 
 # 5) compile 보장
 log "edit 후 컴파일 트리거"
-unity-cli --timeout-ms=120000 editor refresh >/dev/null 2>&1 || true
-unity-cli --timeout-ms=300000 editor compile >/dev/null 2>&1 || log "WARN: editor compile 응답이 늦거나 실패"
+# unity-cli 에 'editor refresh/compile' 액션은 없다 — 'menu execute path=Assets/Refresh' 로 컴파일 트리거.
+unity-cli --timeout-ms=15000 menu execute path="Assets/Refresh" >/dev/null 2>&1 || log "WARN: Assets/Refresh 메뉴 호출 실패"
+sleep 10  # 큰 패키지(특히 첫 git 다운로드)는 컴파일이 길어질 수 있음. 부족하면 호출자가 추가로 대기할 것.
 
 # 6) 재확인
 PKG_LIST="$(unity-cli --json --timeout-ms=30000 package list 2>&1 || true)"

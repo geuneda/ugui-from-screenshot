@@ -18,23 +18,56 @@ UnityToFigma 가 Figma 문서를 Unity UGUI 로 일괄 임포트하기 전에, *
 - `figma.currentPage.children` 의 직접 자식 중 **화면 전체를 감싸는 단일 Frame** 이 있는가?
 - 없거나, 화면 요소들이 Page 의 직접 자식으로 평면 나열돼 있다면 **반드시 Frame 으로 감싸야 한다**.
 
+### 화면 사이즈 추정 절차 (중요)
+
+평면 배치된 페이지에서 MainScreen 의 적절한 W x H 를 정하는 우선순위:
+
+1. **가장 큰 background rectangle 의 사이즈** 를 그대로 사용한다.
+   - 디자이너는 거의 항상 화면 전체를 덮는 배경 사각형 (`사각형 1`, `Background`, `BG` 등) 을 둔다.
+   - 이 노드의 `width x height` 가 곧 디자인 해상도다 (예: `1080x1920`, `1440x3040`).
+2. background 후보가 모호하면 **모든 직접 자식의 bbox 를 합친 영역** 을 사용. 단 음수 좌표 (블리드) 는 0 으로 클램프.
+3. 둘 다 안 되면 디자인 컨텍스트로 추론 (모바일 세로면 `1080x1920`, 태블릿이면 `1440x2160` 등) 후 사용자에게 명시.
+
+추정한 사이즈를 `main.resize(W, H)` 인자로 그대로 쓴다. **이 W x H 는 Unity 의 `CanvasScaler.referenceResolution` 으로 자동 사용** 되므로 다해상도 대응의 기준이 된다.
+
+### 화면 이름 결정 (중복 회피)
+
+다른 페이지에 동일 이름의 Frame 이 이미 있으면 UnityToFigma 가 자동으로 `_1`, `_2` suffix 를 붙여 prefab 을 저장한다 (예: `MainScreen.prefab`, `MainScreen_1.prefab`).
+
+부트스트랩이 suffix 후보를 자동 폴백으로 매칭하긴 하지만, 가능하면 **화면 컨텍스트 prefix** 를 붙여 충돌을 미리 피한다:
+
+| 상황 | 권장 이름 |
+|------|----------|
+| 단일 화면 디자인 | `MainScreen` |
+| 로비/메인 메뉴 | `LobbyScreen`, `MainMenuScreen` |
+| 설정 화면 | `SettingsScreen` |
+| 상점 | `ShopScreen` |
+| 전투 HUD | `BattleHud` |
+| 결과/리워드 | `RewardPopup`, `ResultScreen` |
+
 ### 정리 절차 (use_figma 한 번 호출로 처리)
 
 ```javascript
 const page = figma.currentPage;
 let main = page.children.find(n => n.name === 'MainScreen' && n.type === 'FRAME');
 if (!main) {
+  // 1) 사이즈 추정: 가장 큰 background rectangle 우선
+  const bg = page.children
+    .filter(n => n.type === 'RECTANGLE')
+    .sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+  const W = bg ? Math.round(bg.width)  : 1080;
+  const H = bg ? Math.round(bg.height) : 1920;
+
   main = figma.createFrame();
-  main.name = 'MainScreen'; // 의미있는 영문 이름. 화면이 여러 개면 LobbyScreen, ShopScreen 등.
-  main.x = 0;
-  main.y = 0;
-  // 화면 디자인의 의도된 해상도. 좌표 영역으로 추정 (예: 1440x3040, 1080x1920).
-  main.resize(1440, 3040);
+  main.name = 'MainScreen'; // 또는 화면 컨텍스트 (LobbyScreen, SettingsScreen 등)
+  main.x = bg ? bg.x : 0;
+  main.y = bg ? bg.y : 0;
+  main.resize(W, H);
   main.fills = []; // 자식 배경이 따로 있으면 투명, 아니면 디자인 배경색 채움
   main.clipsContent = true;
   page.appendChild(main);
 
-  // 모든 기존 직접 자식을 MainScreen 안으로 reparent (좌표 자동 보존)
+  // 2) 모든 기존 직접 자식을 MainScreen 안으로 reparent (좌표 자동 보존)
   const others = page.children.filter(c => c !== main).slice();
   for (const node of others) main.appendChild(node);
 }

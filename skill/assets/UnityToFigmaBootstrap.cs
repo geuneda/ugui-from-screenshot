@@ -404,6 +404,33 @@ namespace UguiFromScreenshot.Editor
                         break;
                     }
                 }
+                // UnityToFigma 는 다른 페이지에 동일 이름의 Frame 이 있을 때 _1, _2 suffix 를 붙인다.
+                // 사용자가 "MainScreen" 을 요청했는데 그 이름이 다른 페이지에서 선점되어 우리가
+                // 만든 화면이 "MainScreen_1" 으로 저장된 케이스를 자동 매칭한다.
+                if (targetPath == null)
+                {
+                    string bestSuffixMatch = null;
+                    int bestSuffixIndex = int.MaxValue;
+                    foreach (var p in prefabs)
+                    {
+                        var n = Path.GetFileNameWithoutExtension(p);
+                        if (n.StartsWith(requestedName + "_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var tail = n.Substring(requestedName.Length + 1);
+                            if (int.TryParse(tail, out var idx) && idx >= 0 && idx < bestSuffixIndex)
+                            {
+                                bestSuffixIndex = idx;
+                                bestSuffixMatch = p;
+                            }
+                        }
+                    }
+                    if (bestSuffixMatch != null)
+                    {
+                        targetPath = bestSuffixMatch;
+                        Debug.Log($"[UnityToFigmaBootstrap] '{requestedName}' 를 못 찾아 suffix 후보로 폴백: " +
+                                  $"{Path.GetFileNameWithoutExtension(bestSuffixMatch)} (UnityToFigma 가 페이지 간 이름 충돌로 _{bestSuffixIndex} 부여)");
+                    }
+                }
                 if (targetPath == null)
                 {
                     Debug.LogWarning($"[UnityToFigmaBootstrap] 지정된 defaultScreenName='{requestedName}' 를 못 찾아 첫 프리팹으로 폴백합니다.");
@@ -583,16 +610,7 @@ namespace UguiFromScreenshot.Editor
             var requestedName = ContextString("defaultScreenName")
                                 ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
                                 ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
-            string targetPath = null;
-            if (!string.IsNullOrEmpty(requestedName))
-            {
-                foreach (var p in prefabs)
-                {
-                    if (string.Equals(Path.GetFileNameWithoutExtension(p), requestedName, StringComparison.OrdinalIgnoreCase))
-                    { targetPath = p; break; }
-                }
-            }
-            if (targetPath == null) targetPath = prefabs[0];
+            var targetPath = ResolveTargetScreenPath(prefabs, requestedName);
 
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(targetPath);
             var rt = prefab != null ? prefab.GetComponent<RectTransform>() : null;
@@ -601,6 +619,166 @@ namespace UguiFromScreenshot.Editor
             int width = Mathf.RoundToInt(rt.rect.width);
             int height = Mathf.RoundToInt(rt.rect.height);
             ApplyGameViewAspect(width, height, prefab.name);
+        }
+
+        // 디자인 사이즈 (Screen prefab.referenceResolution) 그대로 RT 캡처.
+        // unity-cli ui screenshot.capture 가 GameView 의 현재 종횡비 그대로 찍어서 검증이 어려운 문제를 보완한다.
+        // CanvasScaler 를 일시적으로 ConstantPixelSize 로 바꿔 픽셀 단위 정확 렌더링 후 원복.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Capture Default Screen", priority = 23)]
+        public static void CaptureDefaultScreen()
+        {
+            LoadContextFileIfPresent();
+
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null) { Debug.LogError("[UnityToFigmaBootstrap] settings 없음"); return; }
+            var importRoot = GetStringField(settings, "ImportRoot") ?? "Assets/Figma";
+            var screensFolder = GetStringField(settings, "ScreensFolderName") ?? "Screens";
+            var prefabs = ListAssets($"{importRoot}/{screensFolder}", "*.prefab");
+            if (prefabs.Count == 0) { Debug.LogWarning("[UnityToFigmaBootstrap] Screen prefab 없음"); return; }
+
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
+            var targetPath = ResolveTargetScreenPath(prefabs, requestedName);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(targetPath);
+            var rtPrefab = prefab != null ? prefab.GetComponent<RectTransform>() : null;
+            if (rtPrefab == null) { Debug.LogError("[UnityToFigmaBootstrap] prefab RectTransform 없음"); return; }
+
+            int width = Mathf.Max(1, Mathf.RoundToInt(rtPrefab.rect.width));
+            int height = Mathf.Max(1, Mathf.RoundToInt(rtPrefab.rect.height));
+            var outputRel = ContextString("captureOutputPath")
+                            ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_CAPTURE_PATH")
+                            ?? $"Assets/_Temp/{prefab.name}_Capture_{width}x{height}.png";
+            CaptureSceneCanvases(width, height, outputRel, prefab.name);
+        }
+
+        private static string ResolveTargetScreenPath(List<string> prefabs, string requestedName)
+        {
+            string targetPath = null;
+            if (!string.IsNullOrEmpty(requestedName))
+            {
+                foreach (var p in prefabs)
+                {
+                    if (string.Equals(Path.GetFileNameWithoutExtension(p), requestedName, StringComparison.OrdinalIgnoreCase))
+                    { targetPath = p; break; }
+                }
+                // Suffix 폴백 (UnityToFigma 가 동일 이름 충돌 시 _1/_2 부여)
+                if (targetPath == null)
+                {
+                    string best = null;
+                    int bestIdx = int.MaxValue;
+                    foreach (var p in prefabs)
+                    {
+                        var n = Path.GetFileNameWithoutExtension(p);
+                        if (n.StartsWith(requestedName + "_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var tail = n.Substring(requestedName.Length + 1);
+                            if (int.TryParse(tail, out var idx) && idx < bestIdx)
+                            {
+                                bestIdx = idx;
+                                best = p;
+                            }
+                        }
+                    }
+                    targetPath = best;
+                }
+            }
+            if (targetPath == null) targetPath = prefabs[0];
+            return targetPath;
+        }
+
+        private static void CaptureSceneCanvases(int w, int h, string outputRel, string label)
+        {
+            string projectRoot = Path.GetDirectoryName(Application.dataPath);
+            string outputAbs = Path.IsPathRooted(outputRel) ? outputRel : Path.Combine(projectRoot, outputRel);
+            string dir = Path.GetDirectoryName(outputAbs);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            var canvases = UnityEngine.Object.FindObjectsByType<Canvas>(FindObjectsSortMode.None);
+            if (canvases.Length == 0)
+            {
+                Debug.LogWarning("[UnityToFigmaBootstrap] 씬에 Canvas 가 없어 캡처를 스킵합니다.");
+                return;
+            }
+
+            var origModes = new RenderMode[canvases.Length];
+            var origCams = new Camera[canvases.Length];
+            var scalers = new UnityEngine.UI.CanvasScaler[canvases.Length];
+            var origScaleMode = new UnityEngine.UI.CanvasScaler.ScaleMode[canvases.Length];
+            var origScaleFactor = new float[canvases.Length];
+            var origRefRes = new Vector2[canvases.Length];
+            var origMatch = new float[canvases.Length];
+
+            var camGo = new GameObject("__UguiCaptureCam");
+            camGo.transform.position = new Vector3(0, 0, -100);
+            var cam = camGo.AddComponent<Camera>();
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = new Color(0.94f, 0.96f, 0.98f, 1f);
+            cam.orthographic = true;
+            cam.orthographicSize = h / 2f;
+            cam.aspect = (float)w / h;
+            cam.nearClipPlane = 0.1f;
+            cam.farClipPlane = 500f;
+
+            var rt = new RenderTexture(w, h, 24);
+            rt.antiAliasing = 1;
+            cam.targetTexture = rt;
+
+            for (int i = 0; i < canvases.Length; i++)
+            {
+                origModes[i] = canvases[i].renderMode;
+                origCams[i] = canvases[i].worldCamera;
+                scalers[i] = canvases[i].GetComponent<UnityEngine.UI.CanvasScaler>();
+                if (scalers[i] != null)
+                {
+                    origScaleMode[i] = scalers[i].uiScaleMode;
+                    origScaleFactor[i] = scalers[i].scaleFactor;
+                    origRefRes[i] = scalers[i].referenceResolution;
+                    origMatch[i] = scalers[i].matchWidthOrHeight;
+
+                    scalers[i].uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ConstantPixelSize;
+                    scalers[i].scaleFactor = 1f;
+                }
+                canvases[i].renderMode = RenderMode.ScreenSpaceCamera;
+                canvases[i].worldCamera = cam;
+                canvases[i].planeDistance = 10;
+            }
+
+            try
+            {
+                Canvas.ForceUpdateCanvases();
+                cam.Render();
+
+                var tex = new Texture2D(w, h, TextureFormat.ARGB32, false);
+                var prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                tex.Apply();
+                RenderTexture.active = prev;
+
+                File.WriteAllBytes(outputAbs, tex.EncodeToPNG());
+                UnityEngine.Object.DestroyImmediate(tex);
+            }
+            finally
+            {
+                for (int i = 0; i < canvases.Length; i++)
+                {
+                    canvases[i].renderMode = origModes[i];
+                    canvases[i].worldCamera = origCams[i];
+                    if (scalers[i] != null)
+                    {
+                        scalers[i].uiScaleMode = origScaleMode[i];
+                        scalers[i].scaleFactor = origScaleFactor[i];
+                        scalers[i].referenceResolution = origRefRes[i];
+                        scalers[i].matchWidthOrHeight = origMatch[i];
+                    }
+                }
+                UnityEngine.Object.DestroyImmediate(camGo);
+                UnityEngine.Object.DestroyImmediate(rt);
+            }
+
+            AssetDatabase.Refresh();
+            Debug.Log($"[UnityToFigmaBootstrap] 캡처 완료 ({label}, {w}x{h}) → {outputAbs}");
         }
 
         private static void ApplyGameViewAspect(int width, int height, string label)

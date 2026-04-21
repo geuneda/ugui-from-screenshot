@@ -38,7 +38,13 @@ PROJECT_PATH="${PROJECT_PATH:-}"
 FIGMA_DOCUMENT_URL="${FIGMA_DOCUMENT_URL:-}"
 FIGMA_PAT="${FIGMA_PAT:-}"
 [ -n "$FIGMA_DOCUMENT_URL" ] || fail "FIGMA_DOCUMENT_URL 환경변수가 필요합니다."
-[ -n "$FIGMA_PAT" ] || fail "FIGMA_PAT 환경변수가 필요합니다."
+
+# PAT 은 비어있어도 OK. 부트스트랩이 폴백 체인 (ContextFile.pat → 환경변수 →
+# EditorPrefs → PlayerPrefs(FIGMA_PERSONAL_ACCESS_TOKEN) → settings asset) 으로 채운다.
+# 첫 실행 후에는 PlayerPrefs 에 저장되어 PAT 없이 재실행 가능하다.
+if [ -z "$FIGMA_PAT" ]; then
+  log "FIGMA_PAT 미지정 → PlayerPrefs/EditorPrefs 폴백 사용 (이전에 한 번 sync 성공한 적이 있어야 함)"
+fi
 
 # 1) Bridge 헬스체크 (한 번 빠르게)
 unity-cli --timeout-ms=10000 status >/dev/null 2>&1 \

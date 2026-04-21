@@ -1,34 +1,39 @@
-// 프로젝트에 복사: Assets/_Project/Scripts/Editor/GameViewCapture.cs
+// 프로젝트에 복사: Assets/Editor/GameViewCapture.cs
 //
-// 배경: unity-cli에 ui.screenshot.capture 명령이 없다. 또한 Canvas가 Overlay 모드면
-// 일반 카메라 캡처로 잡히지 않는다. CanvasScaler가 ScaleWithScreenSize면 GameView의
-// Screen.width/height와 RT 크기 불일치로 축소 렌더링이 발생한다.
+// 배경: unity-cli 의 ui.screenshot.capture 는 GameView 의 현재 RT 를 그대로 캡처한다.
+// Canvas 가 Overlay 모드면 일반 카메라 캡처에는 안 잡히고, ScaleWithScreenSize 면
+// GameView 의 Screen.width/height 와 디자인 referenceResolution 의 비율이 안 맞아서
+// 원하는 픽셀 크기로 검증 캡처를 받기 어렵다.
 //
-// 이 유틸리티는 캡처 직전에 Canvas를 ScreenSpaceCamera + ConstantPixelSize(scale=1.0)
-// 로 임시 전환하여 픽셀 단위로 의도대로 렌더링시키고, 완료 후 원복한다.
+// 이 유틸리티는 캡처 직전에 Canvas 를 ScreenSpaceCamera + ConstantPixelSize(scale=1.0)
+// 로 임시 전환하여 임의 W x H 의 RenderTexture 로 정확히 렌더링한 뒤, 원복한다.
+//
+// UnityToFigma Bootstrap 메뉴 (Tools/UnityToFigma Bootstrap/Capture Default Screen) 가
+// 현재 Canvas 의 referenceResolution 을 사용해서 같은 동작을 자동으로 수행한다.
+// 이 파일은 디자인 사이즈를 직접 지정하고 싶을 때 쓰는 수동 백업이다.
 //
 // 사용:
-//   unity-cli menu execute path="Tools/Capture Game View"      → 전체 Canvas 캡처
-//   unity-cli menu execute path="Tools/Capture Card Only"      → 984x666 카드 중심 캡처
+//   unity-cli menu execute path="Tools/UguiFromScreenshot/Capture Game View 1080x1920"
+//   unity-cli menu execute path="Tools/UguiFromScreenshot/Capture Game View 1440x3040"
 //
-// 출력 경로: Assets/_Temp/GameCapture.png, Assets/_Temp/CardCapture.png
+// 출력 경로: Assets/_Temp/GameCapture_<W>x<H>.png
 
 using System.IO;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace SpellDefense.Editor
+namespace UguiFromScreenshot.Editor
 {
     public static class GameViewCapture
     {
-        [MenuItem("Tools/Capture Game View")]
-        public static void CaptureFull() => Capture(1440, 3040, "Assets/_Temp/GameCapture.png");
+        [MenuItem("Tools/UguiFromScreenshot/Capture Game View 1080x1920")]
+        public static void Capture1080x1920() => Capture(1080, 1920, "Assets/_Temp/GameCapture_1080x1920.png");
 
-        [MenuItem("Tools/Capture Card Only")]
-        public static void CaptureCardOnly() => Capture(984, 666, "Assets/_Temp/CardCapture.png");
+        [MenuItem("Tools/UguiFromScreenshot/Capture Game View 1440x3040")]
+        public static void Capture1440x3040() => Capture(1440, 3040, "Assets/_Temp/GameCapture_1440x3040.png");
 
-        static void Capture(int w, int h, string outputPath)
+        public static void Capture(int w, int h, string outputPath)
         {
             string dir = Path.GetDirectoryName(outputPath);
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);

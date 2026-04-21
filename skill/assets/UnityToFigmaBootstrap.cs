@@ -61,6 +61,7 @@ namespace UguiFromScreenshot.Editor
         private const string FIGMA_PAT_PREF_KEY = "FIGMA_PERSONAL_ACCESS_TOKEN";
         private const string EDITOR_PREF_URL = "ugui.figma.documentUrl";
         private const string EDITOR_PREF_PAT = "ugui.figma.pat";
+        private const string EDITOR_PREF_DEFAULT_SCREEN = "ugui.figma.defaultScreenName";
         private const string DEFAULT_REPORT_PATH = "Assets/_Temp/UnityToFigmaReport.json";
         private const string SETTINGS_ASSET_PATH = "Assets/UnityToFigmaSettings.asset";
         private const string UNITY_TO_FIGMA_SYNC_MENU = "UnityToFigma/Sync Document";
@@ -391,7 +392,7 @@ namespace UguiFromScreenshot.Editor
             string targetPath = null;
             var requestedName = ContextString("defaultScreenName")
                                 ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
-                                ?? EditorPrefs.GetString("ugui.figma.defaultScreenName", null);
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
             if (!string.IsNullOrEmpty(requestedName))
             {
                 foreach (var p in prefabs)
@@ -425,11 +426,43 @@ namespace UguiFromScreenshot.Editor
                 Debug.Log($"[UnityToFigmaBootstrap] 기존 인스턴스 제거: {prefab.name}");
             }
 
+            // ContextFile/EditorPrefs 의 cleanOtherScreens(기본 true) 가 true 면
+            // 같은 Canvas 안의 다른 Screen prefab 인스턴스도 모두 제거한다.
+            // (하나의 Canvas 에 여러 화면이 겹쳐 보이는 문제 방지)
+            var cleanOthers = ContextBool("cleanOtherScreens") ?? true;
+            if (cleanOthers)
+            {
+                CleanOtherScreensInCanvas(prefabs, prefab.name);
+            }
+
+            // 더 강력한 옵션: clearCanvasOnInstantiate(기본 true) 가 true 면
+            // 검색 대상 Canvas 의 모든 자식을 제거한 뒤 새 Screen 만 남긴다.
+            // unpack 된 prefab 잔재 등 이름으로 추적 불가능한 객체까지 깨끗이 청소한다.
+            var clearCanvas = ContextBool("clearCanvasOnInstantiate") ?? true;
+            if (clearCanvas)
+            {
+                ClearTargetCanvas(prefab.name);
+            }
+
+            // 핵심 워크플로우: Screen prefab 의 사이즈(RectTransform.sizeDelta) 를 읽어
+            // Canvas referenceResolution 으로 사용한다. UnityToFigma 가 만든 Screen 은
+            // Figma 최상위 Frame 사이즈를 그대로 보존하므로(예: 1440x3040), 이를 기준 해상도로
+            // 잡으면 다해상도 환경에서 비율이 깨지지 않는다.
+            var prefabRT = prefab.GetComponent<RectTransform>();
+            Vector2 referenceResolution = new Vector2(1080f, 1920f);
+            if (prefabRT != null && prefabRT.rect.width > 1f && prefabRT.rect.height > 1f)
+            {
+                referenceResolution = new Vector2(prefabRT.rect.width, prefabRT.rect.height);
+            }
+
             var canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
             Transform parent;
             if (canvas == null)
             {
-                var go = new GameObject("Canvas", typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
+                var go = new GameObject("UICanvas",
+                    typeof(Canvas),
+                    typeof(UnityEngine.UI.CanvasScaler),
+                    typeof(UnityEngine.UI.GraphicRaycaster));
                 canvas = go.GetComponent<Canvas>();
                 canvas.renderMode = RenderMode.ScreenSpaceOverlay;
                 parent = canvas.transform;
@@ -439,17 +472,225 @@ namespace UguiFromScreenshot.Editor
                 parent = canvas.transform;
             }
 
+            // CanvasScaler 를 Screen prefab 사이즈에 맞춤
+            var scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
+            if (scaler == null) scaler = canvas.gameObject.AddComponent<UnityEngine.UI.CanvasScaler>();
+            scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = referenceResolution;
+            scaler.screenMatchMode = UnityEngine.UI.CanvasScaler.ScreenMatchMode.Expand;
+
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
-            // RectTransform 기본 위치/크기 정합 (Canvas 자식 기준)
+            // Screen 을 Canvas 안에 풀스트레치로 정합 (Figma 좌표 그대로 보이게)
             var rt = instance.transform as RectTransform;
             if (rt != null)
             {
+                rt.anchorMin = Vector2.zero;
+                rt.anchorMax = Vector2.one;
+                rt.pivot = new Vector2(0.5f, 0.5f);
                 rt.anchoredPosition = Vector2.zero;
+                rt.offsetMin = Vector2.zero;
+                rt.offsetMax = Vector2.zero;
                 rt.localScale = Vector3.one;
             }
             Selection.activeGameObject = instance;
             EditorSceneRefresh();
-            Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {targetPath} (parent={parent.name})");
+            Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {targetPath} " +
+                      $"(parent={parent.name}, referenceResolution={referenceResolution.x}x{referenceResolution.y})");
+
+            // GameView 종횡비도 자동으로 디자인에 맞춘다 (cleanOtherScreens 와 동일하게 기본 활성)
+            var syncAspect = ContextBool("syncGameViewAspect") ?? true;
+            if (syncAspect && prefabRT != null)
+            {
+                int width = Mathf.RoundToInt(prefabRT.rect.width);
+                int height = Mathf.RoundToInt(prefabRT.rect.height);
+                ApplyGameViewAspect(width, height, prefab.name);
+            }
+        }
+
+        private static void ClearTargetCanvas(string keepName)
+        {
+            var canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
+            if (canvas == null) return;
+            int removed = 0;
+            for (int i = canvas.transform.childCount - 1; i >= 0; i--)
+            {
+                var child = canvas.transform.GetChild(i).gameObject;
+                if (child.name == keepName) continue;
+                UnityEngine.Object.DestroyImmediate(child);
+                removed++;
+            }
+            if (removed > 0)
+            {
+                Debug.Log($"[UnityToFigmaBootstrap] Canvas 청소: {removed} 개 자식 제거 (남긴 이름='{keepName}')");
+            }
+        }
+
+        private static void CleanOtherScreensInCanvas(List<string> screenPrefabPaths, string keepName)
+        {
+            var screenNames = new HashSet<string>();
+            foreach (var p in screenPrefabPaths)
+            {
+                screenNames.Add(Path.GetFileNameWithoutExtension(p));
+            }
+            int removed = 0;
+            // 씬 전체에서 Screen prefab 이름과 일치하는 GameObject 를 찾아 제거.
+            // (씬 루트에 떠있는 잔재 + Canvas 자식 모두 포함)
+            var scene = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
+            var rootGOs = scene.GetRootGameObjects();
+            foreach (var root in rootGOs)
+            {
+                if (root == null) continue;
+                if (root.name != keepName && screenNames.Contains(root.name))
+                {
+                    UnityEngine.Object.DestroyImmediate(root);
+                    removed++;
+                    continue;
+                }
+                // 자식들도 검사 (다른 Canvas 안에 있을 수도 있음)
+                var allChildren = root.GetComponentsInChildren<Transform>(true);
+                foreach (var t in allChildren)
+                {
+                    if (t == null || t.gameObject == null) continue;
+                    if (t.gameObject == root) continue;
+                    if (t.gameObject.name != keepName && screenNames.Contains(t.gameObject.name))
+                    {
+                        UnityEngine.Object.DestroyImmediate(t.gameObject);
+                        removed++;
+                    }
+                }
+            }
+            if (removed > 0)
+            {
+                Debug.Log($"[UnityToFigmaBootstrap] 씬 내 다른 Screen 인스턴스 정리: {removed} 개");
+            }
+        }
+
+        // GameView Aspect 를 Screen prefab 의 종횡비에 맞춰 자동 변경한다.
+        // referenceResolution 만 맞추면 ScaleWithScreenSize=Expand 가 화면을 축소만 시키므로,
+        // 디자인 전체가 GameView 에 보이려면 GameView 자체의 종횡비를 디자인과 맞춰야 한다.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Sync GameView Aspect To Default Screen", priority = 22)]
+        public static void SyncGameViewAspectToDefaultScreen()
+        {
+            LoadContextFileIfPresent();
+
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null) { Debug.LogError("[UnityToFigmaBootstrap] settings 없음"); return; }
+            var importRoot = GetStringField(settings, "ImportRoot") ?? "Assets/Figma";
+            var screensFolder = GetStringField(settings, "ScreensFolderName") ?? "Screens";
+            var prefabs = ListAssets($"{importRoot}/{screensFolder}", "*.prefab");
+            if (prefabs.Count == 0) { Debug.LogWarning("[UnityToFigmaBootstrap] Screen prefab 없음"); return; }
+
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
+            string targetPath = null;
+            if (!string.IsNullOrEmpty(requestedName))
+            {
+                foreach (var p in prefabs)
+                {
+                    if (string.Equals(Path.GetFileNameWithoutExtension(p), requestedName, StringComparison.OrdinalIgnoreCase))
+                    { targetPath = p; break; }
+                }
+            }
+            if (targetPath == null) targetPath = prefabs[0];
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(targetPath);
+            var rt = prefab != null ? prefab.GetComponent<RectTransform>() : null;
+            if (rt == null) { Debug.LogError("[UnityToFigmaBootstrap] prefab RectTransform 없음"); return; }
+
+            int width = Mathf.RoundToInt(rt.rect.width);
+            int height = Mathf.RoundToInt(rt.rect.height);
+            ApplyGameViewAspect(width, height, prefab.name);
+        }
+
+        private static void ApplyGameViewAspect(int width, int height, string label)
+        {
+            try
+            {
+                var sizesAsm = typeof(UnityEditor.Editor).Assembly;
+                var gvSizes = sizesAsm.GetType("UnityEditor.GameViewSizes");
+                var groupTypeEnum = sizesAsm.GetType("UnityEditor.GameViewSizeGroupType");
+                if (gvSizes == null || groupTypeEnum == null)
+                {
+                    Debug.LogWarning("[UnityToFigmaBootstrap] GameViewSizes 타입 미발견. GameView 종횡비 변경 생략.");
+                    return;
+                }
+                var instProp = gvSizes.GetProperty("instance", BindingFlags.Static | BindingFlags.Public);
+                if (instProp == null)
+                {
+                    Debug.LogWarning("[UnityToFigmaBootstrap] GameViewSizes.instance 프로퍼티 미발견.");
+                    return;
+                }
+                var instance = instProp.GetValue(null);
+                if (instance == null)
+                {
+                    Debug.LogWarning("[UnityToFigmaBootstrap] GameViewSizes.instance == null.");
+                    return;
+                }
+                var getGroup = gvSizes.GetMethod("GetGroup", new[] { groupTypeEnum });
+                if (getGroup == null)
+                {
+                    Debug.LogWarning("[UnityToFigmaBootstrap] GameViewSizes.GetGroup(groupType) 미발견.");
+                    return;
+                }
+                var standalone = Enum.Parse(groupTypeEnum, "Standalone");
+                var group = getGroup.Invoke(instance, new object[] { standalone });
+                if (group == null)
+                {
+                    Debug.LogWarning("[UnityToFigmaBootstrap] GameViewSizeGroup(Standalone) 가져오기 실패.");
+                    return;
+                }
+                var groupType = group.GetType();
+
+                var sizeType = sizesAsm.GetType("UnityEditor.GameViewSize");
+                var sizeTypeEnum = sizesAsm.GetType("UnityEditor.GameViewSizeType");
+                var fixedRes = Enum.Parse(sizeTypeEnum, "FixedResolution");
+                var displayName = $"UGUI {label} {width}x{height}";
+
+                var customCount = (int)groupType.GetMethod("GetCustomCount").Invoke(group, null);
+                int targetIndex = -1;
+                var totalCount = (int)groupType.GetMethod("GetTotalCount").Invoke(group, null);
+                var getDisplayTexts = groupType.GetMethod("GetDisplayTexts");
+                var labels = (string[])getDisplayTexts.Invoke(group, null);
+                for (int i = 0; i < labels.Length; i++)
+                {
+                    if (labels[i].StartsWith(displayName))
+                    {
+                        targetIndex = i;
+                        break;
+                    }
+                }
+                if (targetIndex < 0)
+                {
+                    var sizeCtor = sizeType.GetConstructor(new[] { sizeTypeEnum, typeof(int), typeof(int), typeof(string) });
+                    var newSize = sizeCtor.Invoke(new object[] { fixedRes, width, height, displayName });
+                    groupType.GetMethod("AddCustomSize").Invoke(group, new[] { newSize });
+                    labels = (string[])getDisplayTexts.Invoke(group, null);
+                    for (int i = 0; i < labels.Length; i++)
+                    {
+                        if (labels[i].StartsWith(displayName)) { targetIndex = i; break; }
+                    }
+                }
+
+                var gvType = sizesAsm.GetType("UnityEditor.GameView");
+                var gameView = EditorWindow.GetWindow(gvType, false, null, false);
+                var setSize = gvType.GetMethod("SizeSelectionCallback", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (setSize != null)
+                {
+                    setSize.Invoke(gameView, new object[] { targetIndex, null });
+                }
+                else
+                {
+                    var selectedSizeIndex = gvType.GetProperty("selectedSizeIndex", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                    if (selectedSizeIndex != null) selectedSizeIndex.SetValue(gameView, targetIndex);
+                }
+                gameView.Repaint();
+                Debug.Log($"[UnityToFigmaBootstrap] GameView 종횡비를 {displayName} 으로 설정 (index={targetIndex}).");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[UnityToFigmaBootstrap] GameView 종횡비 변경 실패: " + e.Message);
+            }
         }
 
         private static void EditorSceneRefresh()
@@ -474,10 +715,33 @@ namespace UguiFromScreenshot.Editor
                 var raw = File.ReadAllText(path);
                 s_Context = ParseSimpleJson(raw);
                 Debug.Log("[UnityToFigmaBootstrap] context 파일 로드: " + path);
+                // ContextFile 은 sync 완료 시 자동 삭제되지만, defaultScreenName 등은
+                // 후속 메뉴 (Instantiate Default Screen) 가 다시 사용해야 하므로 EditorPrefs 로 영속화한다.
+                PersistContextDefaults();
             }
             catch (Exception e)
             {
                 Debug.LogWarning("[UnityToFigmaBootstrap] context 파일 파싱 실패: " + e.Message);
+            }
+        }
+
+        private static void PersistContextDefaults()
+        {
+            if (s_Context == null) return;
+            var defaultScreen = ContextString("defaultScreenName");
+            if (!string.IsNullOrEmpty(defaultScreen))
+            {
+                EditorPrefs.SetString(EDITOR_PREF_DEFAULT_SCREEN, defaultScreen);
+            }
+            var url = ContextString("documentUrl");
+            if (!string.IsNullOrEmpty(url))
+            {
+                EditorPrefs.SetString(EDITOR_PREF_URL, url);
+            }
+            var pat = ContextString("pat");
+            if (!string.IsNullOrEmpty(pat))
+            {
+                EditorPrefs.SetString(EDITOR_PREF_PAT, pat);
             }
         }
 

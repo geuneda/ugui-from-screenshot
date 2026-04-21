@@ -45,6 +45,9 @@ Component=Prefab, Auto Layout, 폰트 자동 다운로드 등).
 | `Scale` constraint | 미지원 | 보정 시 다른 anchor 정책으로 우회. |
 | **라운드 코너** | UnityToFigma 가 SDF 로 처리. 임포트 결과 그대로 사용. | **추가 라운드 보정/스프라이트 교체 시도 금지.** `references/round-corner-policy.md` 참조. |
 | 폰트 매칭 실패 | Console 로그에 `[UnityToFigma]` 로 남음 | 보고만. 사용자에게 폰트 추가 요청. |
+| **TMP fallback 한글 누락 (`□` 표시)** | UnityToFigma 가 글리프 자체를 채워주진 못함 | 보고만. `references/font-fallback-policy.md` 의 안내 메시지를 사용자에게 출력. |
+| **Page 직접 자식만 있고 화면 루트 Frame 없음** | sync 결과가 예측 불가 | sync **전에** `references/figma-prep-policy.md` 절차로 1차 정리 (MainScreen Frame 으로 감싸기). |
+| **한국어/자동생성 레이어 이름** | GameObject 이름이 한글이 되어 인코딩/검색 이슈 | sync **전에** `figma-prep-policy.md` 절차로 영문화. 텍스트 *내용* 은 안 건드림. |
 
 ## 사전 준비 (다이얼로그 회피)
 

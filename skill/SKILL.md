@@ -15,6 +15,9 @@ UI 디자인을 Unity UGUI 로 옮기는 스킬. **Figma URL 입력 시에는 [U
 2. **라운드 코너는 추가 보정/대체를 하지 않는다**. Path A (UnityToFigma) 에서는 `FigmaImage.cornerRadius` 가 SDF 로 정확히 처리되므로 그대로 둔다. Path B (스크린샷) 에서는 라운드를 사용자에게 위임한다. **어떤 경우에도 sprite/mask 로 라운드를 흉내내지 말 것.** 자세한 규칙: `references/round-corner-policy.md`
 3. **에이전트는 차이만 처리**. 자동 임포트가 만든 결과 vs 레퍼런스 스크린샷을 비교해서 실제로 빠진/잘못된 항목만 수정한다. 전체를 다시 만들지 않는다.
 4. **다이얼로그가 뜨는 작업은 자동화하지 말 것**. 다이얼로그를 띄우는 환경(설정 누락, PAT 미입력, TMP Essentials 미설치 등)은 사전 부트스트랩으로 박아두거나 사용자에게 한 번 요청한다.
+5. **Sync 전 Figma 1차 정리 필수**. 페이지에 화면 루트 Frame 이 없거나 한국어/자동생성 레이어명이 섞여 있으면, 에이전트가 `use_figma` 로 먼저 정리한 뒤에 sync 한다. 자세한 정책: `references/figma-prep-policy.md`
+6. **Canvas 는 화면 단위로 referenceResolution 을 맞춘다**. 부트스트랩의 `Instantiate Default Screen` 메뉴가 Screen prefab 의 `RectTransform.sizeDelta` 를 읽어 Canvas `CanvasScaler.referenceResolution` 으로 자동 설정한다. 하나의 Canvas 에 여러 화면을 욱여넣지 않는다 (필요 시 화면별로 새 Canvas 사용 또는 기본 옵션 `clearCanvasOnInstantiate=true` 로 한 번에 한 화면만 표시).
+7. **한글 텍스트는 자동 폰트 변경하지 않는다**. TMP fallback 에 한글이 없으면 `□` 로 표시되는데, 에이전트는 임의로 폰트를 깔지 않고 사용자에게 안내만 한다. 자세한 정책: `references/font-fallback-policy.md`
 
 ## Prerequisites
 
@@ -181,6 +184,42 @@ unity-cli resource get packages/list | grep -i textmeshpro
 # Essentials 가 없으면 사용자에게 안내하고 중단
 ```
 
+#### Step 1A.2.5: Figma 1차 정리 (Sync 전 위생 점검)
+
+`get_metadata` 로 대상 노드를 한 번 훑은 뒤 다음 4가지를 점검한다. 자세한 절차·코드: `references/figma-prep-policy.md`.
+
+| 점검 항목 | 처리 |
+|----------|------|
+| 화면 루트 Frame 부재 (Page 직접 자식으로 평면 나열) | `use_figma` 로 `MainScreen` Frame 생성 + 모든 노드 reparent |
+| 한국어/특수문자/공백 들어간 레이어 이름 | ID → 영문 PascalCase 매핑 후 `use_figma` 로 일괄 변경 |
+| `레이어 1 복사 4` / `사각형 19 복사 3` / `그룹 5` 같은 자동생성 이름 | 의미 영문명으로 변경 (예: `LobbyTabBg`, `EnergyResourceBg`) |
+| 같은 시각적 컴포넌트가 형제 평면화 | 같은 Frame 으로 묶기 (Auto Layout 강제는 안 함) |
+
+레이어 *이름* 만 영문화하고 텍스트 *내용* (`characters`) 은 절대 건드리지 않는다 (디자인 의도 보존). 정리 후 `use_figma` 응답의 `missing` 가 비어있어야 하고, 새 MainScreen 의 ID 를 다음 단계 URL 의 `node-id` 에 반영한다.
+
+**한 번의 use_figma 호출 예시** (wrap + rename 동시):
+
+```javascript
+const page = figma.currentPage;
+let main = page.children.find(n => n.name === 'MainScreen' && n.type === 'FRAME');
+if (!main) {
+  main = figma.createFrame();
+  main.name = 'MainScreen';
+  main.x = 0; main.y = 0;
+  main.resize(1440, 3040); // 좌표 영역 추정 (Page bounds)
+  main.fills = []; main.clipsContent = true;
+  page.appendChild(main);
+  for (const node of page.children.filter(c => c !== main).slice()) main.appendChild(node);
+}
+const renameMap = { '3:3': 'Background', '3:7': 'BottomTabBar', /* ... */ };
+let renamed = 0;
+for (const id of Object.keys(renameMap)) {
+  const node = await figma.getNodeByIdAsync(id);
+  if (node) { node.name = renameMap[id]; renamed++; }
+}
+return { mainScreenId: main.id, mainChildCount: main.children.length, renamed };
+```
+
 #### Step 1A.3: 일괄 임포트 실행
 
 부트스트랩 스크립트가 다음을 자동 처리한다:
@@ -201,6 +240,12 @@ bash scripts/run_unity_to_figma_sync.sh
 - `UGUI_FIGMA_BUILD_PROTOTYPE_FLOW=true` : PrototypeFlow 빌드 활성화 (씬 다이얼로그 발생 가능 → 권장하지 않음)
 - `UGUI_FIGMA_REPORT_PATH=...` : 리포트 출력 경로 변경 (기본 `Assets/_Temp/UnityToFigmaReport.json`)
 - `UGUI_FIGMA_KEEP_CONTEXT=true` : 디버깅용. 부트스트랩이 `Library/UguiFigmaContext.json` 을 삭제하지 않음 (PAT 평문 노출 주의)
+- `UGUI_FIGMA_DEFAULT_SCREEN=MainScreen` : 후속 `Instantiate Default Screen` 메뉴가 띄울 Screen prefab 이름. ContextFile 의 `"defaultScreenName"` 키와 동등. ContextFile 이 sync 후 자동 삭제되므로 부트스트랩이 이 값을 EditorPrefs(`ugui.figma.defaultScreenName`) 로 영속화하여 Sync 이후에도 사용한다.
+
+ContextFile (`Library/UguiFigmaContext.json`) 에 추가로 둘 수 있는 키:
+- `"cleanOtherScreens"` (bool, 기본 true) : 씬 내 다른 Screen prefab 인스턴스 자동 정리
+- `"clearCanvasOnInstantiate"` (bool, 기본 true) : 대상 Canvas 자식 모두 비움 (한 화면만 보이게)
+- `"syncGameViewAspect"` (bool, 기본 true) : GameView 종횡비를 prefab 사이즈에 맞춤
 
 **PAT 재사용 (검증됨)**: 첫 실행 시 부트스트랩이 PAT 을 PlayerPrefs(`FIGMA_PERSONAL_ACCESS_TOKEN`) 에 저장한다. 두 번째 실행부터는 `FIGMA_PAT` 을 비워둬도 부트스트랩이 폴백 체인 (ContextFile → Env → EditorPrefs → PlayerPrefs → 기존 settings) 에서 자동으로 채운다. 다른 디자인 파일을 임포트할 때는 `FIGMA_DOCUMENT_URL` 만 바꿔서 재실행하면 된다.
 
@@ -237,7 +282,7 @@ for m in d.get('result', {}).get('logs', []):
 - `roundedExtreme` : `max(cornerRadius) >= 500` (pill / circle 후보, 시각 검토 권장)
 - `roundedSkipped` : 검출 실패 (대개 0; FigmaImage 타입 미참조 등)
 
-#### Step 1A.5: 기본 화면 인스턴스화
+#### Step 1A.5: 기본 화면 인스턴스화 (Canvas referenceResolution 자동 설정)
 
 `BuildPrototypeFlow=false` 인 경우 씬에 자동 인스턴스화되지 않는다. 본 스킬은 다음 메뉴로 첫 Screen 을 현재 씬에 띄운다:
 
@@ -245,18 +290,33 @@ for m in d.get('result', {}).get('logs', []):
 unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Screen"
 ```
 
-여러 화면을 띄워야 하면 사용자에게 어떤 Screen 프리팹을 띄울지 확인 후 직접 인스턴스화:
+이 메뉴는 다음을 한 번에 수행한다 (검증됨, 2026-04-21):
 
-```bash
-unity-cli --json asset add-to-scene assetPath=Assets/Figma/Screens/MainScreen.prefab
-```
+1. `defaultScreenName` 매칭 (ContextFile/EditorPrefs/환경변수 → 폴백: 알파벳 첫 prefab) 으로 대상 Screen prefab 선택
+2. 같은 이름의 기존 인스턴스 제거 → 반복 호출 안전
+3. **다른 Screen prefab 인스턴스 정리** (`cleanOtherScreens=true` 기본): 씬 루트 + 모든 Canvas 자식에서 동일 폴더 내 다른 Screen prefab 이름과 매칭되는 GameObject 제거
+4. **Canvas 청소** (`clearCanvasOnInstantiate=true` 기본): 대상 Canvas 의 모든 자식을 비움. unpack 된 prefab 잔재처럼 이름으로 추적 불가능한 객체까지 깨끗이 정리하여 한 화면만 보이게 한다
+5. 없으면 `UICanvas` 새로 생성 (ScreenSpaceOverlay)
+6. **CanvasScaler 자동 설정**: `ScaleWithScreenSize`, `referenceResolution = prefab.RectTransform.sizeDelta` (예: 1440x3040), `screenMatchMode = Expand`. 즉 **화면 디자인의 사이즈가 곧 기준 해상도**가 된다
+7. `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 로 인스턴스화 + RectTransform 풀스트레치(anchorMin=0, anchorMax=1, offset=0)
+8. (best-effort) GameView 종횡비를 디자인 사이즈에 맞춰 자동 변경 (Unity 6.x 일부 버전에서 reflection 실패 가능 — 실패해도 다른 동작에 영향 없음)
 
-**검증된 사실 (2026-04-21)**:
-- 인자 이름은 `assetPath=` 다. `path=` 는 거부됨 (`assetPath is required`).
-- `parentName=` / `parent=` 같은 부모 지정 인자는 **무시되어 항상 씬 루트로 들어간다**. UI 프리팹은 Canvas 자식이 아니면 렌더되지 않으므로 별도 reparent 가 필요하다.
-- `unity-cli gameobject reparent` 는 `success=true` 응답이 와도 **실제로 부모가 안 잡히는 경우가 있다** (응답 후 `gameobject get` 으로 보면 `parentId=0` 그대로).
-- 따라서 부트스트랩 메뉴(`Tools/UnityToFigma Bootstrap/Instantiate Default Screen`) 사용을 1순위로 권장. 부트스트랩은 C# 측에서 `RectTransform.SetParent(canvas)` 를 직접 호출하므로 안전하다.
-- 여러 화면을 다 띄워야 하면 부트스트랩 코드의 `InstantiateDefaultScreen` 패턴을 모방해 메뉴를 추가하거나, 사용자가 한 번 직접 드래그하도록 안내한다.
+**옵션 (ContextFile 또는 EditorPrefs 로 제어)**:
+| 키 | 기본값 | 효과 |
+|----|--------|------|
+| `defaultScreenName` | (없음) | 인스턴스화할 prefab 이름. 미지정 시 알파벳 첫 prefab |
+| `cleanOtherScreens` | `true` | 씬에서 다른 Screen prefab 인스턴스 자동 제거 |
+| `clearCanvasOnInstantiate` | `true` | 대상 Canvas 의 모든 자식 비움 (가장 강력한 청소) |
+| `syncGameViewAspect` | `true` | GameView 종횡비를 prefab 사이즈에 맞춰 자동 변경 (실패 시 경고만) |
+
+여러 화면을 띄워야 하는 시나리오:
+- **권장**: 화면별로 별도 Canvas 사용 (Unity 의 ScreenSpaceOverlay Canvas 는 여러 개 동시 사용 가능, sortingOrder 로 정렬). 각 Canvas 의 referenceResolution 을 해당 화면 prefab 사이즈에 맞춤.
+- **비권장**: 한 Canvas 에 여러 Screen 동시 배치 (referenceResolution 이 한 화면 기준이라 다른 화면이 깨짐).
+
+**asset add-to-scene 으로 직접 인스턴스화하지 말 것**:
+- 인자 이름은 `assetPath=` 만 받고 `parent=`/`parentName=` 은 **무시되어 항상 씬 루트로 들어간다**.
+- `gameobject reparent` 는 `success=true` 응답이 와도 **실제로 부모가 안 잡히는 경우가 많다** (`parentId=0` 그대로).
+- → 반드시 부트스트랩 메뉴(`Tools/UnityToFigma Bootstrap/Instantiate Default Screen`) 를 사용한다. C# 측에서 `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 으로 안전하게 처리한다.
 
 > **참고**: 기본 Canvas 이름은 `Canvas` 가 아니라 `UICanvas` 가 자동 생성된다 (UnityToFigma + 부트스트랩 동작).
 

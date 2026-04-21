@@ -109,8 +109,10 @@ unity-cli tool list | grep -E "(ui\.|component|gameobject|menu|editor|package)"
 | 메뉴 호출 | `unity-cli menu execute path="..."` | `result.result: bool` 반환 |
 | 콘솔 조회 | `unity-cli --json console get` | 응답: `result.logs[].{message,timestamp}`. **logType/stackTrace 없음** → 문자열 패턴 매칭으로 분류 |
 | 콘솔 비우기 | `unity-cli console clear` | sync 전후 노이즈 제거 |
-| 게임오브젝트 조회 | `unity-cli --json gameobject get name="X"` | `path=` 가 아니라 `name=` 또는 `id=` |
-| UI 스크린샷 | `unity-cli ui screenshot.capture outputPath=/abs/path.png` | **점 형태 액션 + `outputPath`** (`path=` 아님). size 미지정 시 1920x1080 |
+| 게임오브젝트 조회 | `unity-cli --json gameobject get name="X"` | `path=` 가 아니라 `name=` 또는 `id=`. 응답에 `children` 필드는 없음 |
+| 게임오브젝트 reparent | `unity-cli --json gameobject reparent name=X newParentName=Y` | **success 응답이 와도 실제 적용 안 되는 경우 있음**. 후속 `gameobject get` 으로 `parentId` 검증 필수. UI 프리팹은 부트스트랩 메뉴로 인스턴스화 권장 |
+| 에셋 → 씬 인스턴스화 | `unity-cli --json asset add-to-scene assetPath=Assets/.../X.prefab` | **인자명 `assetPath=`** (`path=` 거부). `parent`/`parentName` 무시 → 항상 씬 루트로 들어감 |
+| UI 스크린샷 | `unity-cli ui screenshot.capture outputPath=/abs/path.png` | **점 형태 액션 + `outputPath`** (`path=` 아님). GameView 의 현재 RT 를 그대로 캡처하므로 디자인 해상도(예: 1080x1920)가 보이려면 GameView 종횡비를 디자인과 일치시켜야 함 |
 
 **환경변수 → Editor 전달은 불가능**:
 unity-cli 는 외부 bridge 통신이라 셸의 `export FIGMA_PAT=...` 가 Unity 프로세스에 전달되지 **않는다**. 자동화에서는 반드시 다음 방법을 쓴다:
@@ -198,6 +200,9 @@ bash scripts/run_unity_to_figma_sync.sh
 옵션:
 - `UGUI_FIGMA_BUILD_PROTOTYPE_FLOW=true` : PrototypeFlow 빌드 활성화 (씬 다이얼로그 발생 가능 → 권장하지 않음)
 - `UGUI_FIGMA_REPORT_PATH=...` : 리포트 출력 경로 변경 (기본 `Assets/_Temp/UnityToFigmaReport.json`)
+- `UGUI_FIGMA_KEEP_CONTEXT=true` : 디버깅용. 부트스트랩이 `Library/UguiFigmaContext.json` 을 삭제하지 않음 (PAT 평문 노출 주의)
+
+**PAT 재사용 (검증됨)**: 첫 실행 시 부트스트랩이 PAT 을 PlayerPrefs(`FIGMA_PERSONAL_ACCESS_TOKEN`) 에 저장한다. 두 번째 실행부터는 `FIGMA_PAT` 을 비워둬도 부트스트랩이 폴백 체인 (ContextFile → Env → EditorPrefs → PlayerPrefs → 기존 settings) 에서 자동으로 채운다. 다른 디자인 파일을 임포트할 때는 `FIGMA_DOCUMENT_URL` 만 바꿔서 재실행하면 된다.
 
 #### Step 1A.4: 임포트 결과 검증
 
@@ -243,10 +248,17 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 여러 화면을 띄워야 하면 사용자에게 어떤 Screen 프리팹을 띄울지 확인 후 직접 인스턴스화:
 
 ```bash
-unity-cli asset add-to-scene path=Assets/Figma/Screens/MainScreen.prefab parentName=Canvas
+unity-cli --json asset add-to-scene assetPath=Assets/Figma/Screens/MainScreen.prefab
 ```
 
-> **참고**: 기본 Canvas 이름은 `Canvas` 가 아니라 `UICanvas` 가 자동 생성된다 (UnityToFigma + 부트스트랩 동작). `parentName=` 지정 시 이를 고려.
+**검증된 사실 (2026-04-21)**:
+- 인자 이름은 `assetPath=` 다. `path=` 는 거부됨 (`assetPath is required`).
+- `parentName=` / `parent=` 같은 부모 지정 인자는 **무시되어 항상 씬 루트로 들어간다**. UI 프리팹은 Canvas 자식이 아니면 렌더되지 않으므로 별도 reparent 가 필요하다.
+- `unity-cli gameobject reparent` 는 `success=true` 응답이 와도 **실제로 부모가 안 잡히는 경우가 있다** (응답 후 `gameobject get` 으로 보면 `parentId=0` 그대로).
+- 따라서 부트스트랩 메뉴(`Tools/UnityToFigma Bootstrap/Instantiate Default Screen`) 사용을 1순위로 권장. 부트스트랩은 C# 측에서 `RectTransform.SetParent(canvas)` 를 직접 호출하므로 안전하다.
+- 여러 화면을 다 띄워야 하면 부트스트랩 코드의 `InstantiateDefaultScreen` 패턴을 모방해 메뉴를 추가하거나, 사용자가 한 번 직접 드래그하도록 안내한다.
+
+> **참고**: 기본 Canvas 이름은 `Canvas` 가 아니라 `UICanvas` 가 자동 생성된다 (UnityToFigma + 부트스트랩 동작).
 
 #### Step 1A.6: 레퍼런스 스크린샷 (선택, 검증용)
 

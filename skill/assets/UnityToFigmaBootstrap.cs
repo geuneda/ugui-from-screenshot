@@ -370,6 +370,8 @@ namespace UguiFromScreenshot.Editor
         [MenuItem("Tools/UnityToFigma Bootstrap/Instantiate Default Screen", priority = 21)]
         public static void InstantiateDefaultScreen()
         {
+            LoadContextFileIfPresent();
+
             var settings = LoadOrCreateSettingsAsset();
             if (settings == null)
             {
@@ -385,16 +387,46 @@ namespace UguiFromScreenshot.Editor
                 return;
             }
 
-            var firstPath = prefabs[0];
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(firstPath);
+            // ContextFile/EditorPrefs 의 defaultScreenName 우선
+            string targetPath = null;
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString("ugui.figma.defaultScreenName", null);
+            if (!string.IsNullOrEmpty(requestedName))
+            {
+                foreach (var p in prefabs)
+                {
+                    var n = Path.GetFileNameWithoutExtension(p);
+                    if (string.Equals(n, requestedName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetPath = p;
+                        break;
+                    }
+                }
+                if (targetPath == null)
+                {
+                    Debug.LogWarning($"[UnityToFigmaBootstrap] 지정된 defaultScreenName='{requestedName}' 를 못 찾아 첫 프리팹으로 폴백합니다.");
+                }
+            }
+            if (targetPath == null) targetPath = prefabs[0];
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(targetPath);
             if (prefab == null)
             {
-                Debug.LogError($"[UnityToFigmaBootstrap] 프리팹 로드 실패: {firstPath}");
+                Debug.LogError($"[UnityToFigmaBootstrap] 프리팹 로드 실패: {targetPath}");
                 return;
             }
 
+            // 같은 이름이 이미 씬에 있으면 제거 (반복 호출 시 중복 방지)
+            var existing = GameObject.Find(prefab.name);
+            if (existing != null)
+            {
+                UnityEngine.Object.DestroyImmediate(existing);
+                Debug.Log($"[UnityToFigmaBootstrap] 기존 인스턴스 제거: {prefab.name}");
+            }
+
             var canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
-            Transform parent = null;
+            Transform parent;
             if (canvas == null)
             {
                 var go = new GameObject("Canvas", typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
@@ -408,8 +440,26 @@ namespace UguiFromScreenshot.Editor
             }
 
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
+            // RectTransform 기본 위치/크기 정합 (Canvas 자식 기준)
+            var rt = instance.transform as RectTransform;
+            if (rt != null)
+            {
+                rt.anchoredPosition = Vector2.zero;
+                rt.localScale = Vector3.one;
+            }
             Selection.activeGameObject = instance;
-            Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {firstPath}");
+            EditorSceneRefresh();
+            Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {targetPath} (parent={parent.name})");
+        }
+
+        private static void EditorSceneRefresh()
+        {
+            try
+            {
+                var scene = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
+                UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(scene);
+            }
+            catch { /* ignore */ }
         }
 
         // ----------------------------------------------------------------- Helpers

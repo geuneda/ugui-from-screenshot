@@ -36,6 +36,22 @@ UnityToFigma 패키지의 `UnityToFigma.Runtime.UI.FigmaImage` 컴포넌트는
 이 정책의 "자동 보정 금지" 는 **그 위에 무언가를 추가/대체하지 않겠다** 는 뜻이지,
 "라운드 자체가 안 들어온다" 는 뜻이 아니다.
 
+### 실측 검증 결과 (2026-04-21, Sparta Club Pro 팀 테스트 파일)
+
+다양한 라운드 케이스를 포함한 모바일 게임 메인 메뉴를 만들어 sync 한 결과:
+
+| Figma 입력 | UnityToFigma 결과 (`m_CornerRadius`) | 분류 |
+|-----------|---------------------------------------|------|
+| `cornerRadius=16` (PlayCard) | `{16, 16, 16, 16}` | roundedHandled |
+| `cornerRadius=24` (HeaderCard) | `{24, 24, 24, 24}` | roundedHandled |
+| `cornerRadius=28/40/56` | 그대로 보존 | roundedHandled |
+| 비대칭 `{8, 32, 64, 16}` | `{8, 32, 64, 16}` (TopLeft/TopRight/BottomRight/BottomLeft) | roundedHandled |
+| 부분 라운드 `{36, 36, 0, 0}` (TabBar) | `{36, 36, 0, 0}` | roundedHandled |
+| `cornerRadius=999` (Avatar/Pill/Indicator) | `{999, 999, 999, 999}` | roundedExtreme |
+
+→ **모든 케이스 (대칭 / 비대칭 / 부분 / pill / circle) 가 SDF 로 정확히 보존됨**.
+→ 추가 보정 시도는 무조건 노이즈를 만든다. 결과 위에 올라타지 말 것.
+
 ## Path 별 적용
 
 ### Path A (Figma URL → UnityToFigma 일괄 임포트)

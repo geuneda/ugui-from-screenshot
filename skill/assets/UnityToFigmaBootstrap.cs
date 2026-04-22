@@ -691,12 +691,10 @@ namespace UguiFromScreenshot.Editor
             // 화면 대응 정책 (검증됨, 2026-04-21):
             //   - uiScaleMode = ScaleWithScreenSize : 화면 사이즈에 비례 스케일
             //   - referenceResolution = 디자인 W x H (예: 1080x1920)
-            //   - screenMatchMode = MatchWidthOrHeight 로 강제. ContextFile.canvasMatchMode = 'expand' / 'shrink' / 'width' / 'height' / 'auto'(기본) 로 override 가능
-            //   - matchWidthOrHeight :
-            //       portrait 디자인 (W < H) → 0 (Width 기준; 가로폭 맞추고 위/아래 안전영역 사용)
-            //       landscape 디자인 (W >= H) → 1 (Height 기준; 세로 맞추고 좌/우 안전영역 사용)
-            //     이렇게 하면 디자인 비율이 다른 화면에서도 한쪽에 붙는 현상이 사라지고
-            //     자연스럽게 중앙 기준으로 비율 유지된다.
+            //   - screenMatchMode 기본 = Expand (실제 사용자 워크플로우에서 가장 빈번; 디자인 박스가
+            //     화면 안에 fit 되어 비율 유지 + 좌우/상하 빈 영역 발생 가능). ContextFile.canvasMatchMode 로
+            //     'auto' / 'width' / 'height' / 'shrink' 로 override 가능.
+            //   - 'auto' 는 portrait → 0(Width), landscape → 1(Height) 자동 매칭.
             var scaler = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
             if (scaler == null) scaler = canvas.gameObject.AddComponent<UnityEngine.UI.CanvasScaler>();
             scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -740,9 +738,22 @@ namespace UguiFromScreenshot.Editor
             }
             Selection.activeGameObject = instance;
             EditorSceneRefresh();
+
+            // 자식 anchor 자동 보정 (default true).
+            // UnityToFigma 가 모든 RT 를 (0,1) TopLeft 로 만들기 때문에 화면 비율이 다르면
+            // 우측 끝 / 하단 정렬되어야 할 요소들이 어긋난다. autoAnchor=true 면 디자인 의도를
+            // 추론해 좌/우/가운데/stretch 등으로 anchor 를 재설정한다.
+            // EditorSceneRefresh 후에 호출해야 nested RT 가 모두 잡힌다.
+            var doAutoAnchor = ContextBool("autoAnchor") ?? true;
+            if (doAutoAnchor)
+            {
+                Canvas.ForceUpdateCanvases();
+                AutoAnchorRoot(instance);
+            }
+
             Debug.Log($"[UnityToFigmaBootstrap] 인스턴스화 완료: {targetPath} " +
                       $"(parent={parent.name}, referenceResolution={referenceResolution.x}x{referenceResolution.y}, " +
-                      $"matchMode={scaler.screenMatchMode}, match={scaler.matchWidthOrHeight:F2})");
+                      $"matchMode={scaler.screenMatchMode}, match={scaler.matchWidthOrHeight:F2}, autoAnchor={doAutoAnchor})");
 
             // GameView 종횡비도 자동으로 디자인에 맞춘다 (cleanOtherScreens 와 동일하게 기본 활성)
             var syncAspect = ContextBool("syncGameViewAspect") ?? true;
@@ -756,15 +767,16 @@ namespace UguiFromScreenshot.Editor
 
         // CanvasScaler 의 ScreenMatchMode 와 matchWidthOrHeight 를 정책에 따라 적용.
         // ContextFile.canvasMatchMode 옵션:
-        //   - "auto"   (기본) : portrait → match=0(Width), landscape → match=1(Height)
+        //   - "expand" (기본) : Expand (디자인 비율 유지하며 화면 안에 들어가도록 축소; 빈 영역 발생 가능)
+        //                      → 사용자 워크플로우에서 가장 일반적인 모드. SafeArea / Notch 대응을 위해
+        //                        자식 anchor 자동 보정(autoAnchor) 과 같이 쓰는 것을 권장.
+        //   - "auto"           : portrait → match=0(Width), landscape → match=1(Height)
         //   - "width"          : MatchWidthOrHeight + match=0 (가로폭 우선)
         //   - "height"         : MatchWidthOrHeight + match=1 (세로 우선)
-        //   - "expand"         : Expand (디자인 비율 유지하며 화면 안에 들어가도록 축소; 빈 영역 발생 가능)
         //   - "shrink"         : Shrink (화면을 채우면서 일부 잘림)
-        // 기본 'auto' 는 사용자 스크린샷에서 가장 자연스러운 결과를 준다 (디자인 비율 유지 + 한쪽 쏠림 없음).
         private static void ApplyScreenMatchMode(UnityEngine.UI.CanvasScaler scaler, Vector2 referenceResolution)
         {
-            var mode = (ContextString("canvasMatchMode") ?? "auto").ToLowerInvariant();
+            var mode = (ContextString("canvasMatchMode") ?? "expand").ToLowerInvariant();
             switch (mode)
             {
                 case "expand":
@@ -913,14 +925,201 @@ namespace UguiFromScreenshot.Editor
                 Debug.Log($"[UnityToFigmaBootstrap] 자식 {total} 개 모두 LayoutGroup 컨텍스트 또는 absolute. 별도 보정 불필요.");
             }
 
+            // autoAnchor 자동 호출 (default true; 이번 사이클부터 도입).
+            // canvasMatchMode=expand 같은 워크플로우에서 자식 anchor 가 모두 (0,1) TopLeft 라
+            // 화면 비율이 다르면 SafeArea 우측/하단을 활용하지 못하는 문제를 해소한다.
+            var doAutoAnchor = ContextBool("autoAnchor") ?? true;
+            if (doAutoAnchor)
+            {
+                AutoAnchorRoot(instance);
+            }
+
             EditorSceneRefresh();
-            Debug.Log($"[UnityToFigmaBootstrap] Apply Responsive Layout 완료 (target={targetName}, design={designSize.x}x{designSize.y})");
+            Debug.Log($"[UnityToFigmaBootstrap] Apply Responsive Layout 완료 (target={targetName}, design={designSize.x}x{designSize.y}, autoAnchor={doAutoAnchor})");
 
             var syncAspect = ContextBool("syncGameViewAspect") ?? true;
             if (syncAspect)
             {
                 ApplyGameViewAspect(Mathf.RoundToInt(designSize.x), Mathf.RoundToInt(designSize.y), targetName);
             }
+        }
+
+        // 자식 RectTransform 의 anchor 를 디자인 의도에 따라 자동 추론한다.
+        //
+        // UnityToFigma 는 모든 RT 를 anchor=(0,1) TopLeft 로 만들고 픽셀 절대 좌표를 사용한다.
+        // 이 상태에서 화면 비율이 디자인과 다르면 우측/하단에 있어야 할 요소가 화면 밖으로 밀리거나
+        // 어중간한 위치에 남는다. SafeArea / Notch 대응도 불가.
+        //
+        // 추론 규칙 (기본값, 옵션으로 threshold override 가능):
+        //   - 자식 width >= parent.width * stretchCoverage(0.85) AND 좌/우 여백 모두 edge(=parent.width*0.10) 이내
+        //     → 가로 stretch (anchorMin.x=0, anchorMax.x=1)
+        //   - 좌측 여백 <= edge AND 우측 여백 > edge*2          → left  (anchor.x=0)
+        //   - 우측 여백 <= edge AND 좌측 여백 > edge*2          → right (anchor.x=1)
+        //   - |좌-우 여백| <= min(좌,우) * centerTolerance(0.30) → center (anchor.x=0.5)
+        //   - 그 외                                              → left (안전한 기본값)
+        // 동일 로직으로 vertical 결정. 결과 anchor 변경 시 worldRect 를 보존하도록 offsetMin/Max 재계산.
+        //
+        // Unity Editor 의 'Toggle Anchors' 와 동일한 위치 보존 변환.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Auto Anchor", priority = 26)]
+        public static void AutoAnchorMenu()
+        {
+            LoadContextFileIfPresent();
+
+            var settings = LoadOrCreateSettingsAsset();
+            if (settings == null) { Debug.LogError("[UnityToFigmaBootstrap] settings 없음"); return; }
+            var importRoot = GetStringField(settings, "ImportRoot") ?? "Assets/Figma";
+            var screensFolder = GetStringField(settings, "ScreensFolderName") ?? "Screens";
+            var prefabs = ListAssets($"{importRoot}/{screensFolder}", "*.prefab");
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
+            string targetName = null;
+            if (prefabs.Count > 0)
+            {
+                var p = ResolveTargetScreenPath(prefabs, requestedName);
+                targetName = Path.GetFileNameWithoutExtension(p);
+            }
+            else if (!string.IsNullOrEmpty(requestedName))
+            {
+                targetName = requestedName;
+            }
+            if (string.IsNullOrEmpty(targetName))
+            {
+                Debug.LogError("[UnityToFigmaBootstrap] 보정 대상 Screen 이름을 결정하지 못했습니다.");
+                return;
+            }
+            var instance = GameObject.Find(targetName);
+            if (instance == null)
+            {
+                Debug.LogError($"[UnityToFigmaBootstrap] 씬에 '{targetName}' 인스턴스가 없습니다. 먼저 'Instantiate Default Screen' 호출.");
+                return;
+            }
+            AutoAnchorRoot(instance);
+            EditorSceneRefresh();
+        }
+
+        private static void AutoAnchorRoot(GameObject root)
+        {
+            var rt = root.transform as RectTransform;
+            if (rt == null) { Debug.LogWarning("[UnityToFigmaBootstrap] AutoAnchor: root RT 없음"); return; }
+
+            float edgeRatio = (float)(ContextDouble("autoAnchorEdgeRatio") ?? 0.10);
+            float centerTolerance = (float)(ContextDouble("autoAnchorCenterTolerance") ?? 0.30);
+            float stretchCoverage = (float)(ContextDouble("autoAnchorStretchCoverage") ?? 0.85);
+            bool enableStretch = ContextBool("autoAnchorEnableStretch") ?? true;
+            bool dryRun = ContextBool("autoAnchorDryRun") ?? false;
+
+            int total = 0, changed = 0;
+            int leftCnt = 0, rightCnt = 0, centerXCnt = 0, stretchXCnt = 0;
+            int topCnt = 0, bottomCnt = 0, centerYCnt = 0, stretchYCnt = 0;
+
+            // 깊이 우선으로 모든 자손 RT 순회 (root 자체는 제외)
+            var allRTs = root.GetComponentsInChildren<RectTransform>(true);
+            foreach (var child in allRTs)
+            {
+                if (child == rt) continue;
+                var parent = child.parent as RectTransform;
+                if (parent == null) continue;
+                total++;
+
+                Vector2 parentSize = parent.rect.size;
+                if (parentSize.x < 1f || parentSize.y < 1f) continue;
+
+                // 부모 좌표계 기준 자식의 사각형
+                Rect childRect = GetRectInParent(child, parent);
+                float leftMargin = childRect.xMin - (-parent.pivot.x * parentSize.x);
+                float rightMargin = (-parent.pivot.x * parentSize.x + parentSize.x) - childRect.xMax;
+                float bottomMargin = childRect.yMin - (-parent.pivot.y * parentSize.y);
+                float topMargin = (-parent.pivot.y * parentSize.y + parentSize.y) - childRect.yMax;
+
+                float edgeX = parentSize.x * edgeRatio;
+                float edgeY = parentSize.y * edgeRatio;
+
+                Vector2 newAnchorMin = child.anchorMin;
+                Vector2 newAnchorMax = child.anchorMax;
+
+                // ===== Horizontal =====
+                bool isStretchX = enableStretch
+                                 && childRect.width >= parentSize.x * stretchCoverage
+                                 && leftMargin <= edgeX && rightMargin <= edgeX;
+                if (isStretchX) { newAnchorMin.x = 0f; newAnchorMax.x = 1f; stretchXCnt++; }
+                else if (leftMargin <= edgeX && rightMargin > edgeX * 2f) { newAnchorMin.x = 0f; newAnchorMax.x = 0f; leftCnt++; }
+                else if (rightMargin <= edgeX && leftMargin > edgeX * 2f) { newAnchorMin.x = 1f; newAnchorMax.x = 1f; rightCnt++; }
+                else
+                {
+                    float minSide = Mathf.Max(1f, Mathf.Min(Mathf.Abs(leftMargin), Mathf.Abs(rightMargin)));
+                    if (Mathf.Abs(leftMargin - rightMargin) <= minSide * centerTolerance)
+                    { newAnchorMin.x = 0.5f; newAnchorMax.x = 0.5f; centerXCnt++; }
+                    else if (leftMargin <= rightMargin)
+                    { newAnchorMin.x = 0f; newAnchorMax.x = 0f; leftCnt++; }
+                    else
+                    { newAnchorMin.x = 1f; newAnchorMax.x = 1f; rightCnt++; }
+                }
+
+                // ===== Vertical =====
+                bool isStretchY = enableStretch
+                                 && childRect.height >= parentSize.y * stretchCoverage
+                                 && topMargin <= edgeY && bottomMargin <= edgeY;
+                if (isStretchY) { newAnchorMin.y = 0f; newAnchorMax.y = 1f; stretchYCnt++; }
+                else if (topMargin <= edgeY && bottomMargin > edgeY * 2f) { newAnchorMin.y = 1f; newAnchorMax.y = 1f; topCnt++; }
+                else if (bottomMargin <= edgeY && topMargin > edgeY * 2f) { newAnchorMin.y = 0f; newAnchorMax.y = 0f; bottomCnt++; }
+                else
+                {
+                    float minSide = Mathf.Max(1f, Mathf.Min(Mathf.Abs(topMargin), Mathf.Abs(bottomMargin)));
+                    if (Mathf.Abs(topMargin - bottomMargin) <= minSide * centerTolerance)
+                    { newAnchorMin.y = 0.5f; newAnchorMax.y = 0.5f; centerYCnt++; }
+                    else if (topMargin <= bottomMargin)
+                    { newAnchorMin.y = 1f; newAnchorMax.y = 1f; topCnt++; }
+                    else
+                    { newAnchorMin.y = 0f; newAnchorMax.y = 0f; bottomCnt++; }
+                }
+
+                if (newAnchorMin == child.anchorMin && newAnchorMax == child.anchorMax) continue;
+                if (dryRun) { changed++; continue; }
+
+                ApplyAnchorPreservingRect(child, parent, newAnchorMin, newAnchorMax, childRect);
+                EditorUtility.SetDirty(child);
+                changed++;
+            }
+
+            Debug.Log($"[UnityToFigmaBootstrap] AutoAnchor 완료: changed={changed}/{total} (dryRun={dryRun}) | " +
+                      $"H: left={leftCnt} right={rightCnt} center={centerXCnt} stretch={stretchXCnt} | " +
+                      $"V: top={topCnt} bottom={bottomCnt} center={centerYCnt} stretch={stretchYCnt}");
+        }
+
+        // 자식 RT 의 부모-좌표계 사각형 (Rect, parent.pivot 기준)
+        private static Rect GetRectInParent(RectTransform child, RectTransform parent)
+        {
+            Vector3[] worldCorners = new Vector3[4];
+            child.GetWorldCorners(worldCorners);
+            Vector3 localBL = parent.InverseTransformPoint(worldCorners[0]); // bottom-left
+            Vector3 localTR = parent.InverseTransformPoint(worldCorners[2]); // top-right
+            return Rect.MinMaxRect(localBL.x, localBL.y, localTR.x, localTR.y);
+        }
+
+        // anchor 를 변경하면서 자식의 worldRect (= 변환 전 화면상 위치/사이즈) 를 보존한다.
+        // Unity Inspector 의 'Toggle Anchors' 동작과 동일.
+        private static void ApplyAnchorPreservingRect(
+            RectTransform child, RectTransform parent,
+            Vector2 newAnchorMin, Vector2 newAnchorMax, Rect worldRectInParent)
+        {
+            Vector2 parentSize = parent.rect.size;
+            float parentLeft = -parent.pivot.x * parentSize.x;
+            float parentBottom = -parent.pivot.y * parentSize.y;
+
+            Vector2 anchorBoxMin = new Vector2(
+                parentLeft + parentSize.x * newAnchorMin.x,
+                parentBottom + parentSize.y * newAnchorMin.y);
+            Vector2 anchorBoxMax = new Vector2(
+                parentLeft + parentSize.x * newAnchorMax.x,
+                parentBottom + parentSize.y * newAnchorMax.y);
+
+            child.anchorMin = newAnchorMin;
+            child.anchorMax = newAnchorMax;
+            child.offsetMin = new Vector2(worldRectInParent.xMin - anchorBoxMin.x,
+                                          worldRectInParent.yMin - anchorBoxMin.y);
+            child.offsetMax = new Vector2(worldRectInParent.xMax - anchorBoxMax.x,
+                                          worldRectInParent.yMax - anchorBoxMax.y);
         }
 
         private static void ClearTargetCanvas(string keepName)

@@ -118,7 +118,7 @@ unity-cli tool list | grep -E "(ui\.|component|gameobject|menu|editor|package)"
 | 게임오브젝트 조회       | `unity-cli --json gameobject get name="X"`                          | `path=` 가 아니라 `name=` 또는 `id=`. 응답에 `children` 필드는 없음                                                                        |
 | 게임오브젝트 reparent | `unity-cli --json gameobject reparent name=X newParentName=Y`       | **success 응답이 와도 실제 적용 안 되는 경우 있음**. 후속 `gameobject get` 으로 `parentId` 검증 필수. UI 프리팹은 부트스트랩 메뉴로 인스턴스화 권장                     |
 | 에셋 → 씬 인스턴스화    | `unity-cli --json asset add-to-scene assetPath=Assets/.../X.prefab` | **인자명 `assetPath=`** (`path=` 거부). `parent`/`parentName` 무시 → 항상 씬 루트로 들어감                                                   |
-| UI 스크린샷         | `unity-cli ui screenshot.capture outputPath=/abs/path.png`          | **점 형태 액션 + `outputPath`** (`path=` 아님). GameView 의 현재 RT 를 그대로 캡처하므로 디자인 해상도(예: 1080x1920)가 보이려면 GameView 종횡비를 디자인과 일치시켜야 함 |
+| UI 스크린샷         | `unity-cli ui screenshot.capture outputPath=/abs/path.png [width=W height=H]`          | **점 형태 액션 + `outputPath`** (`path=` 아님). 인자 없으면 GameView 현재 RT 그대로 캡처. **`width=W height=H` 를 주면 GameView 종횡비와 무관하게 강제 W×H 로 캡처** → 다해상도 검증 (Step 1A.5a) 의 핵심 도구. 디자인 사이즈 그대로 보고 싶으면 `Capture Default Screen` 메뉴 사용 (Step 1A.5b) |
 
 
 **환경변수 → Editor 전달은 불가능**:
@@ -360,6 +360,17 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 
 > **참고**: 기본 Canvas 이름은 `Canvas` 가 아니라 `UICanvas` 가 자동 생성된다 (UnityToFigma + 부트스트랩 동작).
 
+**무시해도 되는 콘솔 노이즈** (검증됨, 2026-04-21):
+
+`Instantiate Default Screen` 직후 콘솔에 다음 류 메시지가 5~10건 섞여 나올 수 있다 — 모두 **정상이며 임포트/렌더링에는 영향 없음**:
+
+| 메시지 패턴 | 원인 | 후속 영향 |
+|---|---|---|
+| `MissingReferenceException: The object of type 'Material' has been destroyed but you are still trying to access it.` (스택에 `FigmaImage`, `MaskableGraphic`) | `clearCanvasOnInstantiate=true` 가 기존 Canvas 자식을 destroy 하면서 그 프레임의 Material 참조가 cleanup 도중 한 번 호출됨 | 인스턴스화 끝나면 새 prefab 의 Material 이 정상 바인딩되어 사라짐 |
+| `Some objects were not cleaned up...` | 위와 동일 cleanup 타이밍 | 위와 동일 |
+
+판정: 인스턴스화 직후 `Diagnose Screen Layout` 메뉴가 `→ CENTER ✓` 를 출력하고 캡처에서 디자인이 정상 렌더링되면 무시 가능. 만약 화면이 비어 있거나 텍스트/이미지가 깨지면 그때 임포트 실패를 의심한다.
+
 #### Step 1A.5a: 다해상도 검증 + 사후 보정 (Apply Responsive Layout)
 
 **중요한 검증 절차** (검증됨, 2026-04-21): 인스턴스화 직후 `ui screenshot.capture outputPath=... width=W height=H` 로 디자인과 다른 비율의 GameView 를 시뮬레이션하여 한쪽 쏠림 / 잘림 / 빈 영역이 없는지 확인한다. 흔한 문제 패턴:
@@ -462,7 +473,11 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Auto Anchor"
 
 #### Step 1A.5b: 디자인 사이즈 그대로 캡처 (검증용)
 
-`unity-cli ui screenshot.capture` 는 GameView 의 현재 RT 를 그대로 찍는다. GameView 종횡비가 디자인과 다르면 (`Sync GameView Aspect` 가 reflection 으로 실패한 Unity 6.x 환경 등) 캡처가 가로 모드로 좌측 정렬돼 시각 검증이 어렵다. 이때:
+> **참고**: Step 1A.5a 의 다해상도 검증은 `unity-cli ui screenshot.capture outputPath=... width=W height=H` 로 GameView 종횡비와 무관하게 강제 W×H 캡처가 가능하다 (검증됨, 2026-04-21 — 처음 본 에이전트가 1080x1920 / 1920x1080 / 1920x1200 / 1080x1080 4개 비율 직접 캡처 성공). 굳이 GameView 종횡비를 디자인과 일치시키지 않아도 된다.
+>
+> 아래 메뉴(`Capture Default Screen`) 는 **prefab 의 sizeDelta 그대로** 픽셀 단위로 캡처하는 별도 경로 — Canvas 를 ConstantPixelSize 로 일시 전환해 1:1 픽셀 정확도가 필요할 때 사용한다.
+
+`unity-cli ui screenshot.capture` 의 width/height 인자가 막혀있는 구버전 브릿지나 prefab 사이즈 그대로 1:1 픽셀 캡처가 필요할 때:
 
 ```bash
 unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Capture Default Screen"
@@ -511,7 +526,17 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Setup TMP Korean Fallb
 [UnityToFigmaBootstrap] TMP Korean Fallback 적용 완료. globalFallbackAdded=1, perAssetFallbackAdded=3
 ```
 
-이후 `Capture Default Screen` 으로 캡처하면 한글이 정상 렌더링된다 (검증: "환경 설정", "사용자닉네임", "레벨 99 · 마법사", "소리/진동/알림", "저장하기" 모두 정상). fallback 등록 후에는 `Setup TMP Korean Fallback` 을 다시 호출해도 멱등 (added=0).
+**멱등 판정 기준** (검증됨, 2026-04-21):
+
+| 출력 | 의미 | 추가 작업 |
+|---|---|---|
+| `globalFallbackAdded=0, perAssetFallbackAdded=0` | 모든 fallback 이 이미 등록되어 있음 → 완료 | 없음 |
+| `globalFallbackAdded=0, perAssetFallbackAdded=N>0` | TMP_Settings 글로벌은 이미 됐지만 일부 per-asset(예: `Inter_SDF.asset`) 에 추가 등록됨 → **정상** (재실행 후엔 0/0 됨) | 없음 |
+| `globalFallbackAdded=1, perAssetFallbackAdded=N` | 처음 등록되었음 | 한 번 더 호출해서 0/0 확인 권장 |
+
+per-asset 만 변경되는 케이스가 가장 흔하다 — UnityToFigma 가 새 텍스트 추가 시 SDF를 재생성하면 fallback table 이 비워진 채로 돌아오기 때문. 호출 후 항상 한글 텍스트가 보이면 OK.
+
+이후 `Capture Default Screen` 으로 캡처하면 한글이 정상 렌더링된다 (검증: "환경 설정", "사용자닉네임", "레벨 99 · 마법사", "소리/진동/알림", "저장하기" 모두 정상).
 
 폰트가 없으면 Debug.LogWarning 으로 안내만 하고 종료 (다이얼로그 없음 → 자동화 안전).
 

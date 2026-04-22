@@ -371,7 +371,7 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 | 디자인이 좌측에 1080 폭으로 붙고 우측 840 영역이 비어 있음 (가로 GameView)     | 구 정책 (root stretch + sizeDelta=0). 자식들이 절대 좌표라 좌상단 쏠림 | 새 정책 (root center-anchor) 으로 자동 해소. 이미 인스턴스화된 화면은 `Apply Responsive Layout` 메뉴 호출                                     |
 | **expand 모드에서 디자인 박스 외부 좌우/상하에 Skybox 빈 영역**            | expand 의 본질적 동작 (디자인 비율 유지). 자식이 root 디자인 박스 밖으로 못 나감 | 의도된 동작. 빈 영역에 다른 UI 가 필요하면 별도 SafeAreaBackground 컨테이너 추가 또는 `canvasMatchMode="auto"` 로 변경 |
 | 위/아래 일부 잘림 (portrait 디자인 + landscape GameView, auto 매칭) | match=Width 자동 선택 → 가로폭은 맞지만 디자인 세로가 화면 밖으로 늘어남        | 정책상 정상 trade-off. `canvasMatchMode="height"` 로 override 시 좌우 빈 영역으로 바뀜 (선호에 따라 선택) |
-| 좌측 쏠림 + 우측 Skybox (expand 모드 + screenRootStretch=true)  | expand 의 스케일 기준이 디자인 박스라 root stretch 와 상충            | expand 모드에선 `screenRootStretch=false` (기본) 유지. SafeArea 활용은 `canvasMatchMode="auto"` + `screenRootStretch=true` + `autoAnchor=true` 조합 |
+| 좌측 쏠림 + 우측 Skybox (expand 모드 + screenRootStretch=true)  | expand 의 스케일 기준이 디자인 박스라 root stretch 와 상충 → root rect 가 (anchor 0~1) + sizeDelta=0 형태가 되어 디자인이 실제로는 stretch 박스 좌상단에만 그려짐 | **`Tools/UnityToFigma Bootstrap/Diagnose Screen Layout`** 으로 root anchor 상태 확인 → STRETCH ⚠ 진단 시 ContextFile 의 `screenRootStretch` 키 제거(또는 false) + `Instantiate Default Screen` 또는 `Apply Responsive Layout` 재호출. SafeArea 활용은 `canvasMatchMode="auto"` + `screenRootStretch=true` + `autoAnchor=true` 조합 |
 
 
 이미 인스턴스화된 화면을 다시 만들지 않고 부분 보정만 하고 싶을 때:
@@ -390,6 +390,39 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Apply Responsive Layou
 6. (옵션) GameView 종횡비도 디자인 사이즈로 재동기화 (`syncGameViewAspect=true` 기본)
 
 **LayoutElement-only 정리 정책 (사용자 위임)**: 본 스킬은 LayoutElement 를 자동 제거하지 않는다 — UnityToFigma 가 향후 LayoutGroup 으로 묶을 가능성을 남겨두기 위해서. 사용자가 명시적으로 정리 원하면 검수 리포트 ("LayoutElement 가 있지만 부모에 LayoutGroup 이 없는 자식 N/M 개") 를 보고 수동 결정.
+
+#### Step 1A.5a-1: Screen Layout 진단 (Diagnose)
+
+**증상이 보일 때 가장 먼저 호출**: 디자인이 화면 한쪽에 붙거나, 자식 anchor 가 모두 TopLeft 같이 보일 때 root RT/Canvas/CanvasScaler 의 실제 값을 콘솔에 출력해 원인을 식별한다.
+
+```bash
+unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Diagnose Screen Layout"
+```
+
+출력 예시 (정상):
+
+```
+[Diagnose] Screen root: parent=UICanvas anchorMin=(0.50, 0.50) anchorMax=(0.50, 0.50) pivot=(0.50, 0.50) sizeDelta=(1080.00, 1920.00) → CENTER ✓
+[Diagnose] Canvas=UICanvas renderMode=ScreenSpaceOverlay | scaler.mode=ScaleWithScreenSize ref=(1080.00, 1920.00) match=Expand matchVal=0.00
+[Diagnose] ContextFile options: screenRootStretch=(미설정 → false) canvasMatchMode=(미설정 → expand) autoAnchor=(미설정 → true)
+```
+
+출력 예시 (사용자 보고 시나리오 = 좌측 쏠림):
+
+```
+[Diagnose] Screen root: ... anchorMin=(0.00, 0.00) anchorMax=(1.00, 1.00) sizeDelta=(0.00, 0.00) → STRETCH ⚠ (좌측 쏠림 원인 가능)
+[Diagnose] ContextFile options: screenRootStretch=True ...
+[Diagnose] root 가 STRETCH 입니다. ContextFile 에서 'screenRootStretch' 키를 제거(또는 false 로 변경)하고 'Instantiate Default Screen' 또는 'Apply Responsive Layout' 을 다시 호출하세요.
+```
+
+원인 카탈로그:
+
+| 진단 출력 | 원인 | 처리 |
+|---------|------|------|
+| `→ STRETCH ⚠` + `screenRootStretch=True` | 이전 검증/실수로 ContextFile 에 옵션 잔존 | ContextFile 에서 키 제거 + 재인스턴스화 |
+| `→ STRETCH ⚠` + `screenRootStretch=(미설정 → false)` | 부트스트랩이 아닌 외부 코드/수동 조작이 root 를 stretch 로 변경 | `Apply Responsive Layout` 호출 (root 정상화) |
+| `→ CENTER ✓` 인데 여전히 좌측 쏠림 | Canvas 가 ScreenSpaceOverlay 가 아닌 경우, 또는 다른 Canvas 인스턴스가 우선 렌더링 | `parent=...` 출력 확인. 의도한 UICanvas 가 아닌 경우 잘못된 부모 → 인스턴스 재생성 |
+| `Canvas 부모가 없음` 경고 | ScreenSpace 렌더링 안 됨 → 화면에 안 보이거나 World Space 로 그려짐 | UICanvas 부모로 이동 또는 `Instantiate Default Screen` 재호출 |
 
 #### Step 1A.5a-2: 자식 RT anchor 자동 보정 (Auto Anchor)
 

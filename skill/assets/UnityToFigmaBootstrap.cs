@@ -960,6 +960,74 @@ namespace UguiFromScreenshot.Editor
         // 동일 로직으로 vertical 결정. 결과 anchor 변경 시 worldRect 를 보존하도록 offsetMin/Max 재계산.
         //
         // Unity Editor 의 'Toggle Anchors' 와 동일한 위치 보존 변환.
+        // Screen root 의 RectTransform / 부모 Canvas / CanvasScaler 상태를 콘솔에 출력한다.
+        // 사용자 보고 케이스 (예: '디자인이 화면 좌측에 붙어 우측 절반이 Skybox') 의 진단에 사용.
+        // 정상 상태:
+        //   - root anchorMin = anchorMax = (0.5, 0.5), pivot = (0.5, 0.5)
+        //   - root sizeDelta = 디자인 W x H (예: 1080x1920)
+        //   - Canvas.renderMode = ScreenSpaceOverlay
+        //   - CanvasScaler.uiScaleMode = ScaleWithScreenSize, referenceResolution = 디자인 W x H, screenMatchMode = Expand (기본)
+        // 좌측 쏠림이 보이면 일반적으로 root anchorMin=(0,0) anchorMax=(1,1) (stretch) + sizeDelta=(0,0) 상태이므로
+        // ContextFile 의 'screenRootStretch' 가 true 로 잡혀 있는지 확인 후 정리 + 재인스턴스화 권장.
+        [MenuItem("Tools/UnityToFigma Bootstrap/Diagnose Screen Layout", priority = 27)]
+        public static void DiagnoseScreenLayoutMenu()
+        {
+            LoadContextFileIfPresent();
+
+            var settings = LoadOrCreateSettingsAsset();
+            var importRoot = settings != null ? (GetStringField(settings, "ImportRoot") ?? "Assets/Figma") : "Assets/Figma";
+            var screensFolder = settings != null ? (GetStringField(settings, "ScreensFolderName") ?? "Screens") : "Screens";
+            var prefabs = ListAssets($"{importRoot}/{screensFolder}", "*.prefab");
+            var requestedName = ContextString("defaultScreenName")
+                                ?? Environment.GetEnvironmentVariable("UGUI_FIGMA_DEFAULT_SCREEN")
+                                ?? EditorPrefs.GetString(EDITOR_PREF_DEFAULT_SCREEN, null);
+            string targetName = null;
+            if (prefabs.Count > 0) { targetName = Path.GetFileNameWithoutExtension(ResolveTargetScreenPath(prefabs, requestedName)); }
+            else if (!string.IsNullOrEmpty(requestedName)) targetName = requestedName;
+            if (string.IsNullOrEmpty(targetName)) { Debug.LogError("[UnityToFigmaBootstrap] Diagnose: 대상 Screen 이름 결정 실패"); return; }
+
+            var go = GameObject.Find(targetName);
+            if (go == null) { Debug.LogError($"[UnityToFigmaBootstrap] Diagnose: 씬에 '{targetName}' 인스턴스가 없습니다. 'Instantiate Default Screen' 먼저 호출."); return; }
+            var rt = go.transform as RectTransform;
+            if (rt == null) { Debug.LogError("[UnityToFigmaBootstrap] Diagnose: root RT 없음"); return; }
+
+            string parentName = rt.parent != null ? rt.parent.name : "(none)";
+            bool rootIsCenter = rt.anchorMin == new Vector2(0.5f, 0.5f) && rt.anchorMax == new Vector2(0.5f, 0.5f);
+            bool rootIsStretch = rt.anchorMin == Vector2.zero && rt.anchorMax == Vector2.one;
+            string rootMode = rootIsCenter ? "CENTER ✓" : (rootIsStretch ? "STRETCH ⚠ (좌측 쏠림 원인 가능)" : "OTHER");
+            Debug.Log($"[Diagnose] Screen root: parent={parentName} anchorMin={rt.anchorMin} anchorMax={rt.anchorMax} pivot={rt.pivot} " +
+                      $"anchoredPosition={rt.anchoredPosition} sizeDelta={rt.sizeDelta} rect={rt.rect} → {rootMode}");
+
+            var canvas = go.GetComponentInParent<Canvas>();
+            if (canvas != null)
+            {
+                var cs = canvas.GetComponent<UnityEngine.UI.CanvasScaler>();
+                if (cs != null)
+                    Debug.Log($"[Diagnose] Canvas={canvas.name} renderMode={canvas.renderMode} | scaler.mode={cs.uiScaleMode} " +
+                              $"ref={cs.referenceResolution} match={cs.screenMatchMode} matchVal={cs.matchWidthOrHeight:F2}");
+                else
+                    Debug.LogWarning($"[Diagnose] Canvas={canvas.name} 에 CanvasScaler 가 없음");
+            }
+            else
+            {
+                Debug.LogWarning("[Diagnose] root 에 Canvas 부모가 없음 → ScreenSpaceOverlay 렌더링 안 됨");
+            }
+
+            // ContextFile 안의 영향 옵션도 출력
+            var stretchOpt = ContextBool("screenRootStretch");
+            var matchModeOpt = ContextString("canvasMatchMode");
+            var autoAnchorOpt = ContextBool("autoAnchor");
+            Debug.Log($"[Diagnose] ContextFile options: screenRootStretch={(stretchOpt.HasValue ? stretchOpt.Value.ToString() : "(미설정 → false)")} " +
+                      $"canvasMatchMode={(matchModeOpt ?? "(미설정 → expand)")} autoAnchor={(autoAnchorOpt.HasValue ? autoAnchorOpt.Value.ToString() : "(미설정 → true)")}");
+
+            if (rootIsStretch)
+            {
+                Debug.LogWarning("[Diagnose] root 가 STRETCH 입니다. ContextFile 에서 'screenRootStretch' 키를 제거(또는 false 로 변경)하고 " +
+                                 "'Instantiate Default Screen' 또는 'Apply Responsive Layout' 을 다시 호출하세요. " +
+                                 "expand 모드에선 STRETCH root 가 좌측 쏠림 + 우측 Skybox 를 유발합니다.");
+            }
+        }
+
         [MenuItem("Tools/UnityToFigma Bootstrap/Auto Anchor", priority = 26)]
         public static void AutoAnchorMenu()
         {

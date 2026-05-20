@@ -1,6 +1,7 @@
 ---
 
 ## name: ugui-from-screenshot
+
 description: UI 디자인을 기반으로 UGUI를 자동 구성하는 스킬. Figma URL은 UnityToFigma 패키지로 일괄 포팅한 뒤 부족한 부분만 unity-cli로 보정하고, 스크린샷은 비전+unity-cli로 구성한다. 라운드 코너는 자동 보정하지 않고 사용자에게 보고한다. 'UGUI from screenshot', 'UGUI from Figma', '스크린샷으로 UI', 'UI 구현', 'screenshot to UGUI', '스크린샷 기반 UI', 'Figma로 UGUI', 'Figma UI 구현' 등의 요청 시 트리거된다.
 metadata:
   mcp-server: figma
@@ -107,18 +108,18 @@ unity-cli tool list | grep -E "(ui\.|component|gameobject|menu|editor|package)"
 **검증된 명령 형식 (실측, 2026-04-21)**:
 
 
-| 영역              | 검증된 호출                                                              | 비고                                                                                                                           |
-| --------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 상태              | `unity-cli status`                                                  | bridge readiness 확인                                                                                                          |
-| 패키지             | `unity-cli --json package list` / `package add ...`                 | 응답: `result.packages[]`                                                                                                      |
-| 컴파일 트리거         | `unity-cli menu execute path="Assets/Refresh"`                      | `editor refresh` 명령 **없음**                                                                                                   |
-| 메뉴 호출           | `unity-cli menu execute path="..."`                                 | `result.result: bool` 반환                                                                                                     |
-| 콘솔 조회           | `unity-cli --json console get`                                      | 응답: `result.logs[].{message,timestamp}`. **logType/stackTrace 없음** → 문자열 패턴 매칭으로 분류                                          |
-| 콘솔 비우기          | `unity-cli console clear`                                           | sync 전후 노이즈 제거                                                                                                               |
-| 게임오브젝트 조회       | `unity-cli --json gameobject get name="X"`                          | `path=` 가 아니라 `name=` 또는 `id=`. 응답에 `children` 필드는 없음                                                                        |
-| 게임오브젝트 reparent | `unity-cli --json gameobject reparent name=X newParentName=Y`       | **success 응답이 와도 실제 적용 안 되는 경우 있음**. 후속 `gameobject get` 으로 `parentId` 검증 필수. UI 프리팹은 부트스트랩 메뉴로 인스턴스화 권장                     |
-| 에셋 → 씬 인스턴스화    | `unity-cli --json asset add-to-scene assetPath=Assets/.../X.prefab` | **인자명 `assetPath=`** (`path=` 거부). `parent`/`parentName` 무시 → 항상 씬 루트로 들어감                                                   |
-| UI 스크린샷         | `unity-cli ui screenshot.capture outputPath=/abs/path.png [width=W height=H]`          | **점 형태 액션 + `outputPath`** (`path=` 아님). 인자 없으면 GameView 현재 RT 그대로 캡처. **`width=W height=H` 를 주면 GameView 종횡비와 무관하게 강제 W×H 로 캡처** → 다해상도 검증 (Step 1A.5a) 의 핵심 도구. 디자인 사이즈 그대로 보고 싶으면 `Capture Default Screen` 메뉴 사용 (Step 1A.5b) |
+| 영역              | 검증된 호출                                                                        | 비고                                                                                                                                                                                                                               |
+| --------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 상태              | `unity-cli status`                                                            | bridge readiness 확인                                                                                                                                                                                                              |
+| 패키지             | `unity-cli --json package list` / `package add ...`                           | 응답: `result.packages[]`                                                                                                                                                                                                          |
+| 컴파일 트리거         | `unity-cli menu execute path="Assets/Refresh"`                                | `editor refresh` 명령 **없음**                                                                                                                                                                                                       |
+| 메뉴 호출           | `unity-cli menu execute path="..."`                                           | `result.result: bool` 반환                                                                                                                                                                                                         |
+| 콘솔 조회           | `unity-cli --json console get`                                                | 응답: `result.logs[].{message,timestamp}`. **logType/stackTrace 없음** → 문자열 패턴 매칭으로 분류                                                                                                                                              |
+| 콘솔 비우기          | `unity-cli console clear`                                                     | sync 전후 노이즈 제거                                                                                                                                                                                                                   |
+| 게임오브젝트 조회       | `unity-cli --json gameobject get name="X"`                                    | `path=` 가 아니라 `name=` 또는 `id=`. 응답에 `children` 필드는 없음                                                                                                                                                                            |
+| 게임오브젝트 reparent | `unity-cli --json gameobject reparent name=X newParentName=Y`                 | **success 응답이 와도 실제 적용 안 되는 경우 있음**. 후속 `gameobject get` 으로 `parentId` 검증 필수. UI 프리팹은 부트스트랩 메뉴로 인스턴스화 권장                                                                                                                         |
+| 에셋 → 씬 인스턴스화    | `unity-cli --json asset add-to-scene assetPath=Assets/.../X.prefab`           | **인자명 `assetPath=`** (`path=` 거부). `parent`/`parentName` 무시 → 항상 씬 루트로 들어감                                                                                                                                                       |
+| UI 스크린샷         | `unity-cli ui screenshot.capture outputPath=/abs/path.png [width=W height=H]` | **점 형태 액션 + `outputPath`** (`path=` 아님). 인자 없으면 GameView 현재 RT 그대로 캡처. `**width=W height=H` 를 주면 GameView 종횡비와 무관하게 강제 W×H 로 캡처** → 다해상도 검증 (Step 1A.5a) 의 핵심 도구. 디자인 사이즈 그대로 보고 싶으면 `Capture Default Screen` 메뉴 사용 (Step 1A.5b) |
 
 
 **환경변수 → Editor 전달은 불가능**:
@@ -323,28 +324,28 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 5. 없으면 `UICanvas` 새로 생성 (ScreenSpaceOverlay)
 6. **CanvasScaler 화면 대응 정책 (검증됨, 2026-04-21)**: `ScaleWithScreenSize`, `referenceResolution = prefab.RectTransform.sizeDelta` (예: 1080x1920), `screenMatchMode` = `canvasMatchMode` 옵션 (**기본 expand** — 사용자 워크플로우에서 가장 일반적). `"auto"` 로 변경 시 portrait→Width / landscape→Height 자동 매칭.
 7. `PrefabUtility.InstantiatePrefab(prefab, canvasTransform)` 로 인스턴스화 + **Screen root 의 RectTransform 을 center-anchor + sizeDelta=디자인 사이즈 로 고정** (검증됨, 2026-04-21).
-   - **구 정책 (stretch + sizeDelta=0) 의 문제**: UnityToFigma 자식들이 픽셀 단위 절대 좌표라 root 가 Canvas 폭으로 stretch 되면 자식들이 좌상단에 몰린다 (사용자 보고: "한쪽에 붙어버림"). 이번 변경으로 해소.
-   - **새 정책**: root 가 항상 디자인 사이즈를 유지하고 화면 가운데에 정렬됨. CanvasScaler 가 화면 비율 차이를 흡수.
+  - **구 정책 (stretch + sizeDelta=0) 의 문제**: UnityToFigma 자식들이 픽셀 단위 절대 좌표라 root 가 Canvas 폭으로 stretch 되면 자식들이 좌상단에 몰린다 (사용자 보고: "한쪽에 붙어버림"). 이번 변경으로 해소.
+  - **새 정책**: root 가 항상 디자인 사이즈를 유지하고 화면 가운데에 정렬됨. CanvasScaler 가 화면 비율 차이를 흡수.
 8. **자식 RT anchor 자동 보정 (`autoAnchor=true` 기본, 검증됨 2026-04-21)**: UnityToFigma 가 만든 자식 RT 들의 anchor=(0,1) TopLeft 고정을 디자인 의도(좌/우/가운데/stretch · 상/하/가운데/stretch)대로 재설정. SafeArea 활용 + 표준 UGUI 베스트 프랙티스 충족. 자세한 알고리즘은 Step 1A.5a-2 참조.
 9. (best-effort) GameView 종횡비를 디자인 사이즈에 맞춰 자동 변경 (Unity 6.x 일부 버전에서 reflection 실패 가능 — 실패해도 다른 동작에 영향 없음)
 
 **옵션 (ContextFile 또는 EditorPrefs 로 제어)**:
 
 
-| 키                          | 기본값      | 효과                                                                                                                    |
-| -------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `defaultScreenName`        | (없음)     | 인스턴스화할 prefab 이름. 미지정 시 알파벳 첫 prefab                                                                                  |
-| `cleanOtherScreens`        | `true`   | 씬에서 다른 Screen prefab 인스턴스 자동 제거                                                                                       |
-| `clearCanvasOnInstantiate` | `true`   | 대상 Canvas 의 모든 자식 비움 (가장 강력한 청소)                                                                                      |
-| `syncGameViewAspect`       | `true`   | GameView 종횡비를 prefab 사이즈에 맞춰 자동 변경 (실패 시 경고만)                                                                         |
-| `canvasMatchMode`          | `"expand"` | CanvasScaler.ScreenMatchMode 강제 (실제 사용자 워크플로우에서 가장 빈번). `"expand"` (디자인 박스를 화면 안에 fit + 비율 유지), `"auto"` (포트레이트=Width, 랜드스케이프=Height), `"width"`, `"height"`, `"shrink"` |
-| `screenRootStretch`        | `false`  | `true` 면 root 를 풀스트레치(0,0~1,1). expand 모드에선 비권장 (스케일이 디자인 박스 기준이라 좌측 쏠림 재현). auto/width/height 모드에서 화면 가득 활용 원할 때만 true |
-| `autoAnchor`               | `true`   | 자식 RectTransform 의 anchor 를 디자인 의도(좌/우/가운데/stretch · 상/하/가운데/stretch)에 맞춰 자동 보정. UnityToFigma 가 모든 자식을 (0,1) TopLeft 로 만드는 한계를 해결 |
-| `autoAnchorEdgeRatio`      | `0.10`   | 부모 폭/높이 대비 가장자리 판정 비율. 자식 여백이 이 값 이내면 해당 가장자리에 정렬된 것으로 간주 |
-| `autoAnchorCenterTolerance`| `0.30`   | 가운데 정렬 판정 허용 오차. \|좌-우 여백\| <= min(좌,우) × 이 값 이면 center 로 분류 |
-| `autoAnchorStretchCoverage`| `0.85`   | stretch 분류 임계. 자식 사이즈가 부모의 이 비율 이상 + 양 가장자리 여백이 모두 edge 이내면 stretch |
-| `autoAnchorEnableStretch`  | `true`   | false 면 stretch 분류를 끄고 좌/우/가운데 정렬만 사용 |
-| `autoAnchorDryRun`         | `false`  | true 면 anchor 변경은 하지 않고 분류 통계만 콘솔에 출력 (사전 시뮬레이션) |
+| 키                           | 기본값        | 효과                                                                                                                                                                       |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `defaultScreenName`         | (없음)       | 인스턴스화할 prefab 이름. 미지정 시 알파벳 첫 prefab                                                                                                                                     |
+| `cleanOtherScreens`         | `true`     | 씬에서 다른 Screen prefab 인스턴스 자동 제거                                                                                                                                          |
+| `clearCanvasOnInstantiate`  | `true`     | 대상 Canvas 의 모든 자식 비움 (가장 강력한 청소)                                                                                                                                         |
+| `syncGameViewAspect`        | `true`     | GameView 종횡비를 prefab 사이즈에 맞춰 자동 변경 (실패 시 경고만)                                                                                                                            |
+| `canvasMatchMode`           | `"expand"` | CanvasScaler.ScreenMatchMode 강제 (실제 사용자 워크플로우에서 가장 빈번). `"expand"` (디자인 박스를 화면 안에 fit + 비율 유지), `"auto"` (포트레이트=Width, 랜드스케이프=Height), `"width"`, `"height"`, `"shrink"` |
+| `screenRootStretch`         | `false`    | `true` 면 root 를 풀스트레치(0,0~1,1). expand 모드에선 비권장 (스케일이 디자인 박스 기준이라 좌측 쏠림 재현). auto/width/height 모드에서 화면 가득 활용 원할 때만 true                                                  |
+| `autoAnchor`                | `true`     | 자식 RectTransform 의 anchor 를 디자인 의도(좌/우/가운데/stretch · 상/하/가운데/stretch)에 맞춰 자동 보정. UnityToFigma 가 모든 자식을 (0,1) TopLeft 로 만드는 한계를 해결                                        |
+| `autoAnchorEdgeRatio`       | `0.10`     | 부모 폭/높이 대비 가장자리 판정 비율. 자식 여백이 이 값 이내면 해당 가장자리에 정렬된 것으로 간주                                                                                                                |
+| `autoAnchorCenterTolerance` | `0.30`     | 가운데 정렬 판정 허용 오차. |좌-우 여백| <= min(좌,우) × 이 값 이면 center 로 분류                                                                                                               |
+| `autoAnchorStretchCoverage` | `0.85`     | stretch 분류 임계. 자식 사이즈가 부모의 이 비율 이상 + 양 가장자리 여백이 모두 edge 이내면 stretch                                                                                                      |
+| `autoAnchorEnableStretch`   | `true`     | false 면 stretch 분류를 끄고 좌/우/가운데 정렬만 사용                                                                                                                                    |
+| `autoAnchorDryRun`          | `false`    | true 면 anchor 변경은 하지 않고 분류 통계만 콘솔에 출력 (사전 시뮬레이션)                                                                                                                         |
 
 
 여러 화면을 띄워야 하는 시나리오:
@@ -364,10 +365,12 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 
 `Instantiate Default Screen` 직후 콘솔에 다음 류 메시지가 5~10건 섞여 나올 수 있다 — 모두 **정상이며 임포트/렌더링에는 영향 없음**:
 
-| 메시지 패턴 | 원인 | 후속 영향 |
-|---|---|---|
+
+| 메시지 패턴                                                                                                                                                     | 원인                                                                                                 | 후속 영향                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------- |
 | `MissingReferenceException: The object of type 'Material' has been destroyed but you are still trying to access it.` (스택에 `FigmaImage`, `MaskableGraphic`) | `clearCanvasOnInstantiate=true` 가 기존 Canvas 자식을 destroy 하면서 그 프레임의 Material 참조가 cleanup 도중 한 번 호출됨 | 인스턴스화 끝나면 새 prefab 의 Material 이 정상 바인딩되어 사라짐 |
-| `Some objects were not cleaned up...` | 위와 동일 cleanup 타이밍 | 위와 동일 |
+| `Some objects were not cleaned up...`                                                                                                                      | 위와 동일 cleanup 타이밍                                                                                  | 위와 동일                                        |
+
 
 판정: 인스턴스화 직후 `Diagnose Screen Layout` 메뉴가 `→ CENTER ✓` 를 출력하고 캡처에서 디자인이 정상 렌더링되면 무시 가능. 만약 화면이 비어 있거나 텍스트/이미지가 깨지면 그때 임포트 실패를 의심한다.
 
@@ -376,13 +379,13 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Instantiate Default Sc
 **중요한 검증 절차** (검증됨, 2026-04-21): 인스턴스화 직후 `ui screenshot.capture outputPath=... width=W height=H` 로 디자인과 다른 비율의 GameView 를 시뮬레이션하여 한쪽 쏠림 / 잘림 / 빈 영역이 없는지 확인한다. 흔한 문제 패턴:
 
 
-| 증상                                                      | 원인                                                     | 처리                                                                                                               |
-| ------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| **자식 RT 의 anchor 가 모두 (0,1) TopLeft 고정** (Inspector 시각 확인) | UnityToFigma 의 출력 그대로. 화면 비율 변하면 우측/하단 정렬되어야 할 요소가 어긋남 + SafeArea 활용 불가 | **`autoAnchor=true` (기본)** 가 인스턴스화 직후 자동 보정. 사후 단독 호출은 `Tools/UnityToFigma Bootstrap/Auto Anchor` |
-| 디자인이 좌측에 1080 폭으로 붙고 우측 840 영역이 비어 있음 (가로 GameView)     | 구 정책 (root stretch + sizeDelta=0). 자식들이 절대 좌표라 좌상단 쏠림 | 새 정책 (root center-anchor) 으로 자동 해소. 이미 인스턴스화된 화면은 `Apply Responsive Layout` 메뉴 호출                                     |
-| **expand 모드에서 디자인 박스 외부 좌우/상하에 Skybox 빈 영역**            | expand 의 본질적 동작 (디자인 비율 유지). 자식이 root 디자인 박스 밖으로 못 나감 | 의도된 동작. 빈 영역에 다른 UI 가 필요하면 별도 SafeAreaBackground 컨테이너 추가 또는 `canvasMatchMode="auto"` 로 변경 |
-| 위/아래 일부 잘림 (portrait 디자인 + landscape GameView, auto 매칭) | match=Width 자동 선택 → 가로폭은 맞지만 디자인 세로가 화면 밖으로 늘어남        | 정책상 정상 trade-off. `canvasMatchMode="height"` 로 override 시 좌우 빈 영역으로 바뀜 (선호에 따라 선택) |
-| 좌측 쏠림 + 우측 Skybox (expand 모드 + screenRootStretch=true)  | expand 의 스케일 기준이 디자인 박스라 root stretch 와 상충 → root rect 가 (anchor 0~1) + sizeDelta=0 형태가 되어 디자인이 실제로는 stretch 박스 좌상단에만 그려짐 | **`Tools/UnityToFigma Bootstrap/Diagnose Screen Layout`** 으로 root anchor 상태 확인 → STRETCH ⚠ 진단 시 ContextFile 의 `screenRootStretch` 키 제거(또는 false) + `Instantiate Default Screen` 또는 `Apply Responsive Layout` 재호출. SafeArea 활용은 `canvasMatchMode="auto"` + `screenRootStretch=true` + `autoAnchor=true` 조합 |
+| 증상                                                         | 원인                                                                                                                        | 처리                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **자식 RT 의 anchor 가 모두 (0,1) TopLeft 고정** (Inspector 시각 확인) | UnityToFigma 의 출력 그대로. 화면 비율 변하면 우측/하단 정렬되어야 할 요소가 어긋남 + SafeArea 활용 불가                                                   | `**autoAnchor=true` (기본)** 가 인스턴스화 직후 자동 보정. 사후 단독 호출은 `Tools/UnityToFigma Bootstrap/Auto Anchor`                                                                                                                                                                                                         |
+| 디자인이 좌측에 1080 폭으로 붙고 우측 840 영역이 비어 있음 (가로 GameView)        | 구 정책 (root stretch + sizeDelta=0). 자식들이 절대 좌표라 좌상단 쏠림                                                                     | 새 정책 (root center-anchor) 으로 자동 해소. 이미 인스턴스화된 화면은 `Apply Responsive Layout` 메뉴 호출                                                                                                                                                                                                                         |
+| **expand 모드에서 디자인 박스 외부 좌우/상하에 Skybox 빈 영역**               | expand 의 본질적 동작 (디자인 비율 유지). 자식이 root 디자인 박스 밖으로 못 나감                                                                     | 의도된 동작. 빈 영역에 다른 UI 가 필요하면 별도 SafeAreaBackground 컨테이너 추가 또는 `canvasMatchMode="auto"` 로 변경                                                                                                                                                                                                                 |
+| 위/아래 일부 잘림 (portrait 디자인 + landscape GameView, auto 매칭)    | match=Width 자동 선택 → 가로폭은 맞지만 디자인 세로가 화면 밖으로 늘어남                                                                           | 정책상 정상 trade-off. `canvasMatchMode="height"` 로 override 시 좌우 빈 영역으로 바뀜 (선호에 따라 선택)                                                                                                                                                                                                                        |
+| 좌측 쏠림 + 우측 Skybox (expand 모드 + screenRootStretch=true)     | expand 의 스케일 기준이 디자인 박스라 root stretch 와 상충 → root rect 가 (anchor 0~1) + sizeDelta=0 형태가 되어 디자인이 실제로는 stretch 박스 좌상단에만 그려짐 | `**Tools/UnityToFigma Bootstrap/Diagnose Screen Layout`** 으로 root anchor 상태 확인 → STRETCH ⚠ 진단 시 ContextFile 의 `screenRootStretch` 키 제거(또는 false) + `Instantiate Default Screen` 또는 `Apply Responsive Layout` 재호출. SafeArea 활용은 `canvasMatchMode="auto"` + `screenRootStretch=true` + `autoAnchor=true` 조합 |
 
 
 이미 인스턴스화된 화면을 다시 만들지 않고 부분 보정만 하고 싶을 때:
@@ -428,12 +431,14 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Diagnose Screen Layout
 
 원인 카탈로그:
 
-| 진단 출력 | 원인 | 처리 |
-|---------|------|------|
-| `→ STRETCH ⚠` + `screenRootStretch=True` | 이전 검증/실수로 ContextFile 에 옵션 잔존 | ContextFile 에서 키 제거 + 재인스턴스화 |
-| `→ STRETCH ⚠` + `screenRootStretch=(미설정 → false)` | 부트스트랩이 아닌 외부 코드/수동 조작이 root 를 stretch 로 변경 | `Apply Responsive Layout` 호출 (root 정상화) |
-| `→ CENTER ✓` 인데 여전히 좌측 쏠림 | Canvas 가 ScreenSpaceOverlay 가 아닌 경우, 또는 다른 Canvas 인스턴스가 우선 렌더링 | `parent=...` 출력 확인. 의도한 UICanvas 가 아닌 경우 잘못된 부모 → 인스턴스 재생성 |
-| `Canvas 부모가 없음` 경고 | ScreenSpace 렌더링 안 됨 → 화면에 안 보이거나 World Space 로 그려짐 | UICanvas 부모로 이동 또는 `Instantiate Default Screen` 재호출 |
+
+| 진단 출력                                             | 원인                                                             | 처리                                                         |
+| ------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------- |
+| `→ STRETCH ⚠` + `screenRootStretch=True`          | 이전 검증/실수로 ContextFile 에 옵션 잔존                                  | ContextFile 에서 키 제거 + 재인스턴스화                               |
+| `→ STRETCH ⚠` + `screenRootStretch=(미설정 → false)` | 부트스트랩이 아닌 외부 코드/수동 조작이 root 를 stretch 로 변경                     | `Apply Responsive Layout` 호출 (root 정상화)                    |
+| `→ CENTER ✓` 인데 여전히 좌측 쏠림                         | Canvas 가 ScreenSpaceOverlay 가 아닌 경우, 또는 다른 Canvas 인스턴스가 우선 렌더링 | `parent=...` 출력 확인. 의도한 UICanvas 가 아닌 경우 잘못된 부모 → 인스턴스 재생성 |
+| `Canvas 부모가 없음` 경고                                | ScreenSpace 렌더링 안 됨 → 화면에 안 보이거나 World Space 로 그려짐             | UICanvas 부모로 이동 또는 `Instantiate Default Screen` 재호출        |
+
 
 #### Step 1A.5a-2: 자식 RT anchor 자동 보정 (Auto Anchor)
 
@@ -444,7 +449,7 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Diagnose Screen Layout
 - SafeArea / Notch 영역 활용 불가
 - 일반 UGUI 워크플로우 (anchor 기반 반응형) 와 단절
 
-이를 해결하기 위해 인스턴스화 + Apply Responsive Layout 시 **`autoAnchor=true` (기본)** 가 자동으로 자식 RT 의 anchor 를 디자인 의도대로 재설정한다. 단독 호출:
+이를 해결하기 위해 인스턴스화 + Apply Responsive Layout 시 `**autoAnchor=true` (기본)** 가 자동으로 자식 RT 의 anchor 를 디자인 의도대로 재설정한다. 단독 호출:
 
 ```bash
 unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Auto Anchor"
@@ -452,13 +457,15 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Auto Anchor"
 
 **추론 규칙** (모든 임계값은 ContextFile 옵션으로 override):
 
-| 결과 anchor | 조건 |
-|-----------|------|
+
+| 결과 anchor                                     | 조건                                                                                                                     |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **가로 stretch** (anchorMin.x=0, anchorMax.x=1) | 자식 width ≥ parent.width × `autoAnchorStretchCoverage`(0.85) AND 좌/우 여백 모두 ≤ parent.width × `autoAnchorEdgeRatio`(0.10) |
-| **left** (0, 0) | 좌측 여백 ≤ edge AND 우측 여백 > edge × 2 |
-| **right** (1, 1) | 우측 여백 ≤ edge AND 좌측 여백 > edge × 2 |
-| **center-X** (0.5, 0.5) | \|좌-우 여백\| ≤ min(좌,우) × `autoAnchorCenterTolerance`(0.30) |
-| 그 외 | 가까운 가장자리로 폴백 |
+| **left** (0, 0)                               | 좌측 여백 ≤ edge AND 우측 여백 > edge × 2                                                                                      |
+| **right** (1, 1)                              | 우측 여백 ≤ edge AND 좌측 여백 > edge × 2                                                                                      |
+| **center-X** (0.5, 0.5)                       | |좌-우 여백| ≤ min(좌,우) × `autoAnchorCenterTolerance`(0.30)                                                                |
+| 그 외                                           | 가까운 가장자리로 폴백                                                                                                           |
+
 
 세로(top/bottom/center-Y/stretch-Y) 도 동일 로직.
 
@@ -467,6 +474,7 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Auto Anchor"
 **Idempotent**: 두 번째 호출 시 `changed=0/N` (안전하게 반복 호출 가능).
 
 **검증 결과 (Settings 화면 예시)**:
+
 - changed=14/27 (변경된 자식 수 / 전체 자식 수)
 - H: left=6, right=8 (토글 ON/OFF + 우측 텍스트), center=0, stretch=13 (카드 BG, 저장 버튼 BG 등)
 - V: top=17 (헤더, 카드 본문), bottom=2 (저장 버튼 라벨/BG), stretch=8
@@ -528,11 +536,13 @@ unity-cli menu execute path="Tools/UnityToFigma Bootstrap/Setup TMP Korean Fallb
 
 **멱등 판정 기준** (검증됨, 2026-04-21):
 
-| 출력 | 의미 | 추가 작업 |
-|---|---|---|
-| `globalFallbackAdded=0, perAssetFallbackAdded=0` | 모든 fallback 이 이미 등록되어 있음 → 완료 | 없음 |
-| `globalFallbackAdded=0, perAssetFallbackAdded=N>0` | TMP_Settings 글로벌은 이미 됐지만 일부 per-asset(예: `Inter_SDF.asset`) 에 추가 등록됨 → **정상** (재실행 후엔 0/0 됨) | 없음 |
-| `globalFallbackAdded=1, perAssetFallbackAdded=N` | 처음 등록되었음 | 한 번 더 호출해서 0/0 확인 권장 |
+
+| 출력                                                 | 의미                                                                                           | 추가 작업                |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------- |
+| `globalFallbackAdded=0, perAssetFallbackAdded=0`   | 모든 fallback 이 이미 등록되어 있음 → 완료                                                                | 없음                   |
+| `globalFallbackAdded=0, perAssetFallbackAdded=N>0` | TMP_Settings 글로벌은 이미 됐지만 일부 per-asset(예: `Inter_SDF.asset`) 에 추가 등록됨 → **정상** (재실행 후엔 0/0 됨) | 없음                   |
+| `globalFallbackAdded=1, perAssetFallbackAdded=N`   | 처음 등록되었음                                                                                     | 한 번 더 호출해서 0/0 확인 권장 |
+
 
 per-asset 만 변경되는 케이스가 가장 흔하다 — UnityToFigma 가 새 텍스트 추가 시 SDF를 재생성하면 fallback table 이 비워진 채로 돌아오기 때문. 호출 후 항상 한글 텍스트가 보이면 OK.
 
